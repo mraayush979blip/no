@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../services/db';
-import { Branch, Batch, User, Subject, FacultyAssignment, UserRole } from '../types';
-import { Card, Button, Input, Select } from '../components/UI';
-import { Plus, Trash2, ChevronRight, UserPlus, Users, BookOpen, AlertCircle, Database } from 'lucide-react';
+import { Branch, Batch, User, Subject, FacultyAssignment } from '../types';
+import { Card, Button, Input, Select, Modal, FileUploader } from '../components/UI';
+import { Plus, Trash2, ChevronRight, Users, BookOpen, AlertCircle, Database, Edit, Eye, Info } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'students' | 'faculty'>('students');
@@ -65,6 +65,7 @@ const StudentManagement: React.FC = () => {
   const [selBatch, setSelBatch] = useState<Batch | null>(null);
 
   const [newItemName, setNewItemName] = useState('');
+  const [loading, setLoading] = useState(false);
 
   // Fetch Branches on Mount
   useEffect(() => {
@@ -92,14 +93,6 @@ const StudentManagement: React.FC = () => {
     setLevel('students');
   };
 
-  const handleBack = () => {
-    if (level === 'students') setLevel('batches');
-    else if (level === 'batches') {
-      setSelBranch(null);
-      setLevel('branches');
-    }
-  };
-
   const handleAdd = async () => {
     if (!newItemName) return;
     if (level === 'branches') {
@@ -113,23 +106,95 @@ const StudentManagement: React.FC = () => {
     setNewItemName('');
   };
 
+  // CSV Import Handler
+  const handleCSVUpload = async (file: File) => {
+    if (!selBranch || !selBatch) return;
+    setLoading(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const text = e.target?.result as string;
+      const lines = text.split('\n');
+      const newStudents: Partial<User>[] = [];
+      
+      // Expected Format: Enrollment, RollNo, Name, Email
+      // Skip header if present
+      const startIndex = lines[0].toLowerCase().includes('enrollment') ? 1 : 0;
+
+      for (let i = startIndex; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split(',').map(s => s.trim());
+        
+        // Handle optional RollNo in CSV for backward compatibility or robust parsing
+        // If 3 parts: Enrollment, Name, Email (Old)
+        // If 4 parts: Enrollment, RollNo, Name, Email (New)
+        
+        let enroll, roll, name, email;
+        
+        if (parts.length >= 4) {
+           [enroll, roll, name, email] = parts;
+        } else if (parts.length === 3) {
+           [enroll, name, email] = parts;
+           roll = ''; // Empty roll if not provided
+        }
+
+        if (enroll && name && email) {
+          newStudents.push({
+            displayName: name,
+            email: email,
+            studentData: {
+              branchId: selBranch.id,
+              batchId: selBatch.id,
+              enrollmentId: enroll,
+              rollNo: roll
+            }
+          });
+        }
+      }
+
+      if (newStudents.length > 0) {
+        try {
+          await db.importStudents(newStudents);
+          alert(`Successfully imported ${newStudents.length} students. Accounts created with default password = Enrollment ID.`);
+          const studentData = await db.getStudents(selBranch.id, selBatch.id);
+          setStudents(studentData);
+        } catch (err: any) {
+          alert("Import failed: " + err.message);
+        }
+      } else {
+        alert("No valid students found in CSV. Format: Enrollment, RollNo, Name, Email");
+      }
+      setLoading(false);
+    };
+    reader.readAsText(file);
+  };
+
   // Student specific add form
-  const [newStudent, setNewStudent] = useState({ name: '', email: '', enroll: '' });
+  const [newStudent, setNewStudent] = useState({ name: '', email: '', enroll: '', rollNo: '' });
   const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selBranch || !selBatch) return;
-    await db.createStudent({
-      displayName: newStudent.name,
-      email: newStudent.email,
-      studentData: {
-        branchId: selBranch.id,
-        batchId: selBatch.id,
-        enrollmentId: newStudent.enroll
-      }
-    });
-    setNewStudent({ name: '', email: '', enroll: '' });
-    const studentData = await db.getStudents(selBranch.id, selBatch.id);
-    setStudents(studentData);
+    setLoading(true);
+    try {
+      await db.createStudent({
+        displayName: newStudent.name,
+        email: newStudent.email,
+        studentData: {
+          branchId: selBranch.id,
+          batchId: selBatch.id,
+          enrollmentId: newStudent.enroll,
+          rollNo: newStudent.rollNo
+        }
+      });
+      setNewStudent({ name: '', email: '', enroll: '', rollNo: '' });
+      const studentData = await db.getStudents(selBranch.id, selBatch.id);
+      setStudents(studentData);
+      alert(`Student added. Account created with default password: ${newStudent.enroll}`);
+    } catch (e: any) {
+      alert("Error adding student: " + e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -213,18 +278,26 @@ const StudentManagement: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-6">
-           <form onSubmit={handleAddStudent} className="bg-slate-50 p-4 rounded-md border border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-              <Input label="Student Name" required value={newStudent.name} onChange={e => setNewStudent({...newStudent, name: e.target.value})} />
-              <Input label="Email" type="email" required value={newStudent.email} onChange={e => setNewStudent({...newStudent, email: e.target.value})} />
-              <Input label="Enrollment ID" required value={newStudent.enroll} onChange={e => setNewStudent({...newStudent, enroll: e.target.value})} />
-              <Button type="submit" className="mb-3">Add Student</Button>
-           </form>
+           <div className="flex flex-col gap-4 bg-slate-50 p-4 rounded-md border border-slate-200">
+              <form onSubmit={handleAddStudent} className="grid grid-cols-1 md:grid-cols-4 gap-4 w-full">
+                 <Input label="Student Name" required value={newStudent.name} onChange={e => setNewStudent({...newStudent, name: e.target.value})} className="mb-0" />
+                 <Input label="Email" type="email" required value={newStudent.email} onChange={e => setNewStudent({...newStudent, email: e.target.value})} className="mb-0" />
+                 <Input label="Enrollment ID" required value={newStudent.enroll} onChange={e => setNewStudent({...newStudent, enroll: e.target.value})} className="mb-0" />
+                 <Input label="Roll No" value={newStudent.rollNo} onChange={e => setNewStudent({...newStudent, rollNo: e.target.value})} className="mb-0" />
+              </form>
+              <div className="flex gap-2 w-full justify-end">
+                <div title="Format: Enrollment, RollNo, Name, Email (CSV)">
+                  <FileUploader onFileSelect={handleCSVUpload} label="Import CSV" />
+                </div>
+                <Button onClick={handleAddStudent} disabled={loading} className="w-full md:w-auto">{loading ? 'Adding...' : 'Add Student'}</Button>
+              </div>
+           </div>
 
-           <div className="bg-amber-50 border border-amber-200 rounded-md p-3 flex items-start gap-3 text-sm text-amber-800">
-             <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+           <div className="bg-blue-50 border border-blue-200 rounded-md p-3 flex items-start gap-3 text-sm text-blue-800">
+             <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
              <div>
-               <p className="font-semibold">Action Required for Login:</p>
-               <p>This form creates the student's <strong>data profile</strong>. To allow them to log in, you must manually create a user with this email in the <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="underline hover:text-amber-900">Firebase Console &gt; Authentication</a> tab.</p>
+               <p className="font-semibold">Automatic Account Creation:</p>
+               <p>New students are automatically registered. Default Password is their <strong>Enrollment ID</strong>.</p>
              </div>
            </div>
 
@@ -233,6 +306,7 @@ const StudentManagement: React.FC = () => {
                <thead>
                  <tr className="border-b border-slate-300 text-slate-600 text-sm">
                    <th className="py-2 px-2">Enrollment</th>
+                   <th className="py-2 px-2">Roll No</th>
                    <th className="py-2 px-2">Name</th>
                    <th className="py-2 px-2">Email</th>
                    <th className="py-2 px-2 text-right">Actions</th>
@@ -242,6 +316,7 @@ const StudentManagement: React.FC = () => {
                  {students.map(s => (
                    <tr key={s.uid} className="border-b border-slate-100 hover:bg-slate-50">
                      <td className="py-3 px-2 font-mono text-sm text-slate-700">{s.studentData?.enrollmentId}</td>
+                     <td className="py-3 px-2 font-mono text-sm text-slate-700">{s.studentData?.rollNo || '-'}</td>
                      <td className="py-3 px-2 font-medium text-slate-900">{s.displayName}</td>
                      <td className="py-3 px-2 text-slate-600">{s.email}</td>
                      <td className="py-3 px-2 text-right">
@@ -251,7 +326,7 @@ const StudentManagement: React.FC = () => {
                  ))}
                  {students.length === 0 && (
                    <tr>
-                     <td colSpan={4} className="py-4 text-center text-slate-500">No students in this batch yet.</td>
+                     <td colSpan={5} className="py-4 text-center text-slate-500">No students in this batch yet.</td>
                    </tr>
                  )}
                </tbody>
@@ -265,14 +340,24 @@ const StudentManagement: React.FC = () => {
 
 // --- Sub-View: Faculty Management ---
 const FacultyManagement: React.FC = () => {
+  const [activeSubTab, setActiveSubTab] = useState<'subjects' | 'faculty_list' | 'allocations'>('subjects');
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [faculty, setFaculty] = useState<User[]>([]);
   const [assignments, setAssignments] = useState<FacultyAssignment[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
 
+  // Forms
   const [newSub, setNewSub] = useState({ name: '', code: '' });
+  const [newFac, setNewFac] = useState({ name: '', email: '' });
   const [assignForm, setAssignForm] = useState({ facultyId: '', subjectId: '', branchId: '', batchId: '' });
+
+  // Edit Modal State
+  const [editSubject, setEditSubject] = useState<Subject | null>(null);
+  
+  // View Modal State
+  const [viewFacAssignments, setViewFacAssignments] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -298,116 +383,395 @@ const FacultyManagement: React.FC = () => {
     }
   };
 
+  const handleUpdateSubject = async () => {
+    if (editSubject && editSubject.name && editSubject.code) {
+      await db.updateSubject(editSubject.id, editSubject.name, editSubject.code);
+      setEditSubject(null);
+      setSubjects(await db.getSubjects());
+    }
+  };
+
+  const handleAddFaculty = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newFac.name && newFac.email) {
+      setLoading(true);
+      try {
+        await db.createFaculty({ displayName: newFac.name, email: newFac.email });
+        setNewFac({ name: '', email: '' });
+        setFaculty(await db.getFaculty());
+        alert("Faculty profile and account created. Default password: 'password123'");
+      } catch (e: any) {
+        alert("Error creating faculty: " + e.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
   const handleAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (Object.values(assignForm).every(v => v)) {
       await db.assignFaculty(assignForm);
       setAssignments(await db.getAssignments());
-      setAssignForm({ ...assignForm, subjectId: '' }); // Clear subject to allow rapid entry
+      setAssignForm({ ...assignForm, subjectId: '' }); 
     }
   };
 
   const handleDeleteAssignment = async (id: string) => {
-     await db.removeAssignment(id);
-     setAssignments(await db.getAssignments());
+    if(!window.confirm("Remove this assignment?")) return;
+    await db.removeAssignment(id);
+    setAssignments(await db.getAssignments());
+  };
+
+  const handleDeleteSubject = async (id: string) => {
+    if(!window.confirm("Delete this subject?")) return;
+    await db.deleteSubject(id);
+    setSubjects(await db.getSubjects());
+  };
+
+  const handleDeleteFaculty = async (uid: string) => {
+    if(!window.confirm("Delete this faculty member?")) return;
+    await db.deleteUser(uid);
+    setFaculty(await db.getFaculty());
+  };
+
+  // Helper for assignment modal
+  const getFacultyAssignments = (uid: string) => {
+    return assignments.filter(a => a.facultyId === uid);
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Subjects Column */}
-      <div className="space-y-6">
-        <Card>
-          <h3 className="font-bold text-slate-800 mb-4">Manage Subjects</h3>
-          <div className="flex gap-2 mb-4">
-            <Input placeholder="Subject Name" value={newSub.name} onChange={e => setNewSub({...newSub, name: e.target.value})} />
-            <Input placeholder="Code" className="w-24" value={newSub.code} onChange={e => setNewSub({...newSub, code: e.target.value})} />
-            <Button onClick={handleAddSubject} className="mb-3"><Plus className="h-4 w-4"/></Button>
-          </div>
-          <div className="max-h-64 overflow-y-auto">
-             {subjects.map(s => (
-               <div key={s.id} className="flex justify-between items-center p-3 border-b border-slate-100">
-                 <div>
-                   <span className="font-bold text-slate-900 block">{s.name}</span>
-                   <span className="text-xs text-slate-500 bg-slate-100 px-1 rounded">{s.code}</span>
-                 </div>
-                 <button onClick={async () => { await db.deleteSubject(s.id); setSubjects(await db.getSubjects()); }} className="text-slate-400 hover:text-red-600"><Trash2 className="h-4 w-4"/></button>
-               </div>
-             ))}
-          </div>
-        </Card>
+    <div className="space-y-6">
+      {/* Sub Navigation */}
+      <div className="bg-slate-200 p-1 rounded-lg inline-flex">
+        <button 
+          onClick={() => setActiveSubTab('subjects')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeSubTab === 'subjects' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          Subject Library
+        </button>
+        <button 
+          onClick={() => setActiveSubTab('faculty_list')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeSubTab === 'faculty_list' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          Faculty Directory
+        </button>
+        <button 
+          onClick={() => setActiveSubTab('allocations')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeSubTab === 'allocations' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          Allocations
+        </button>
       </div>
 
-      {/* Faculty Assignment Column */}
-      <div className="space-y-6">
+      {activeSubTab === 'subjects' && (
         <Card>
-          <h3 className="font-bold text-slate-800 mb-4">Assign Faculty</h3>
-          <form onSubmit={handleAssign} className="space-y-3 mb-6">
-            <Select 
-              value={assignForm.facultyId} 
-              onChange={e => setAssignForm({...assignForm, facultyId: e.target.value})}
-              required
-            >
-              <option value="">Select Faculty</option>
-              {faculty.map(f => <option key={f.uid} value={f.uid}>{f.displayName}</option>)}
-            </Select>
-
-            <div className="grid grid-cols-2 gap-2">
-              <Select 
-                value={assignForm.branchId} 
-                onChange={e => {
-                  setAssignForm({...assignForm, branchId: e.target.value, batchId: ''});
-                  loadBatches(e.target.value);
-                }}
-                required
-              >
-                <option value="">Select Branch</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </Select>
-              
-              <Select 
-                value={assignForm.batchId} 
-                onChange={e => setAssignForm({...assignForm, batchId: e.target.value})}
-                required
-                disabled={!assignForm.branchId}
-              >
-                <option value="">Select Batch</option>
-                {batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </Select>
+          <div className="flex justify-between items-center mb-6">
+            <div>
+               <h3 className="text-lg font-bold text-slate-800">Subjects Library</h3>
+               <p className="text-sm text-slate-500">Manage global subjects available for allocation.</p>
             </div>
-
-            <Select 
-              value={assignForm.subjectId} 
-              onChange={e => setAssignForm({...assignForm, subjectId: e.target.value})}
-              required
-            >
-              <option value="">Select Subject to Teach</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </Select>
-
-            <Button type="submit" className="w-full">Assign Class</Button>
-          </form>
+          </div>
           
-          <h4 className="text-sm font-semibold text-slate-600 mb-2 border-b pb-1">Current Assignments</h4>
-          <div className="max-h-64 overflow-y-auto space-y-2">
-            {assignments.map(a => {
-              const fac = faculty.find(f => f.uid === a.facultyId);
-              const sub = subjects.find(s => s.id === a.subjectId);
-              const batch = branches.find(b => b.id === a.branchId)?.name.split(' ')[0] + ' / ' + batches.find(b => b.id === a.batchId)?.name;
-              
-              return (
-                <div key={a.id} className="text-sm border border-slate-200 p-2 rounded bg-slate-50 flex justify-between items-start">
-                  <div>
-                    <div className="font-bold text-indigo-700">{fac?.displayName || 'Unknown'}</div>
-                    <div className="text-slate-800">{sub?.name}</div>
-                    <div className="text-xs text-slate-500 mt-1">{batch}</div>
-                  </div>
-                  <button onClick={() => handleDeleteAssignment(a.id)} className="text-red-400 hover:text-red-600"><Trash2 className="h-4 w-4"/></button>
-                </div>
-              );
-            })}
+          {/* Add Form */}
+          <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 flex gap-4 items-end">
+             <div className="flex-grow">
+               <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Subject Name</label>
+               <input 
+                 className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                 placeholder="e.g. Data Structures"
+                 value={newSub.name}
+                 onChange={e => setNewSub({...newSub, name: e.target.value})}
+               />
+             </div>
+             <div className="w-32">
+               <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Code</label>
+               <input 
+                 className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                 placeholder="CS-101"
+                 value={newSub.code}
+                 onChange={e => setNewSub({...newSub, code: e.target.value})}
+               />
+             </div>
+             <Button onClick={handleAddSubject} disabled={!newSub.name || !newSub.code}>Add Subject</Button>
+          </div>
+
+          {/* List */}
+          <div className="border rounded-lg overflow-hidden">
+             <table className="w-full text-left text-sm">
+               <thead className="bg-slate-50 border-b">
+                 <tr>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Code</th>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Subject Name</th>
+                   <th className="px-4 py-3 text-right">Action</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-slate-100">
+                 {subjects.map(s => (
+                   <tr key={s.id} className="hover:bg-slate-50">
+                     <td className="px-4 py-3 font-mono text-slate-600">{s.code}</td>
+                     <td className="px-4 py-3 font-medium text-slate-900">{s.name}</td>
+                     <td className="px-4 py-3 text-right space-x-2">
+                       <button onClick={() => setEditSubject(s)} className="text-slate-400 hover:text-indigo-600 transition" title="Edit">
+                         <Edit className="h-4 w-4" />
+                       </button>
+                       <button onClick={() => handleDeleteSubject(s.id)} className="text-slate-400 hover:text-red-600 transition" title="Delete">
+                         <Trash2 className="h-4 w-4" />
+                       </button>
+                     </td>
+                   </tr>
+                 ))}
+                 {subjects.length === 0 && <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-400">No subjects added yet.</td></tr>}
+               </tbody>
+             </table>
           </div>
         </Card>
-      </div>
+      )}
+
+      {activeSubTab === 'faculty_list' && (
+        <Card>
+          <div className="flex justify-between items-center mb-6">
+            <div>
+               <h3 className="text-lg font-bold text-slate-800">Faculty Directory</h3>
+               <p className="text-sm text-slate-500">Manage faculty members and view their schedules.</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleAddFaculty} className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-6 flex flex-col md:flex-row gap-4 items-end">
+             <Input label="Faculty Name" className="mb-0 flex-grow w-full" value={newFac.name} onChange={e => setNewFac({...newFac, name: e.target.value})} required />
+             <Input label="Email" type="email" className="mb-0 flex-grow w-full" value={newFac.email} onChange={e => setNewFac({...newFac, email: e.target.value})} required />
+             <Button type="submit" disabled={loading}>{loading ? 'Adding...' : 'Add Faculty'}</Button>
+          </form>
+
+          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 flex items-start gap-3 text-sm text-blue-800 mb-6">
+             <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+             <div>
+               <p className="font-semibold">Automatic Account Creation:</p>
+               <p>New faculty members are automatically registered with the default password: <strong>password123</strong>.</p>
+             </div>
+           </div>
+
+          <div className="border rounded-lg overflow-hidden">
+             <table className="w-full text-left text-sm">
+               <thead className="bg-slate-50 border-b">
+                 <tr>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Name</th>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Email</th>
+                   <th className="px-4 py-3 text-right">Actions</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-slate-100">
+                 {faculty.map(f => (
+                   <tr key={f.uid} className="hover:bg-slate-50">
+                     <td className="px-4 py-3 font-medium text-slate-900 flex items-center gap-3">
+                       <div className="h-8 w-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold">
+                          {f.displayName.charAt(0)}
+                       </div>
+                       {f.displayName}
+                     </td>
+                     <td className="px-4 py-3 text-slate-600">{f.email}</td>
+                     <td className="px-4 py-3 text-right space-x-2">
+                       <button 
+                         onClick={() => setViewFacAssignments(f.uid)} 
+                         className="text-indigo-500 hover:text-indigo-700 px-3 py-1 rounded bg-indigo-50 text-xs font-medium transition"
+                       >
+                         View Classes
+                       </button>
+                       <button onClick={() => handleDeleteFaculty(f.uid)} className="text-slate-400 hover:text-red-600 transition" title="Remove">
+                         <Trash2 className="h-4 w-4" />
+                       </button>
+                     </td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+          </div>
+        </Card>
+      )}
+
+      {activeSubTab === 'allocations' && (
+        <Card>
+           <div className="flex justify-between items-center mb-6">
+            <div>
+               <h3 className="text-lg font-bold text-slate-800">Course Allocations</h3>
+               <p className="text-sm text-slate-500">Assign faculty members to specific subjects in branches.</p>
+            </div>
+          </div>
+
+          {/* Allocation Form */}
+          <div className="bg-indigo-50 p-5 rounded-lg border border-indigo-100 mb-8">
+            <h4 className="text-sm font-bold text-indigo-900 mb-3 uppercase tracking-wide">Assign New Class</h4>
+            <form onSubmit={handleAssign} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+               <div className="md:col-span-1">
+                 <label className="block text-xs font-semibold text-indigo-700 mb-1">Faculty</label>
+                 <Select 
+                   className="mb-0" 
+                   value={assignForm.facultyId} 
+                   onChange={e => setAssignForm({...assignForm, facultyId: e.target.value})} 
+                   required
+                 >
+                   <option value="">Select Faculty</option>
+                   {faculty.map(f => <option key={f.uid} value={f.uid}>{f.displayName}</option>)}
+                 </Select>
+               </div>
+               
+               <div className="md:col-span-1">
+                 <label className="block text-xs font-semibold text-indigo-700 mb-1">Context</label>
+                 <div className="flex gap-2">
+                    <Select 
+                      className="mb-0 w-1/2" 
+                      value={assignForm.branchId} 
+                      onChange={e => {
+                        setAssignForm({...assignForm, branchId: e.target.value, batchId: ''});
+                        loadBatches(e.target.value);
+                      }}
+                      required
+                    >
+                      <option value="">Branch</option>
+                      {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </Select>
+                    <Select 
+                      className="mb-0 w-1/2" 
+                      value={assignForm.batchId} 
+                      onChange={e => setAssignForm({...assignForm, batchId: e.target.value})}
+                      required
+                      disabled={!assignForm.branchId}
+                    >
+                      <option value="">Batch</option>
+                      {batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </Select>
+                 </div>
+               </div>
+
+               <div className="md:col-span-1">
+                 <label className="block text-xs font-semibold text-indigo-700 mb-1">Subject</label>
+                 <Select 
+                   className="mb-0" 
+                   value={assignForm.subjectId} 
+                   onChange={e => setAssignForm({...assignForm, subjectId: e.target.value})}
+                   required
+                 >
+                   <option value="">Select Subject</option>
+                   {subjects.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+                 </Select>
+               </div>
+
+               <div className="md:col-span-1">
+                 <Button type="submit" className="w-full">Assign</Button>
+               </div>
+            </form>
+          </div>
+
+          {/* Table */}
+           <div className="border rounded-lg overflow-hidden">
+             <table className="w-full text-left text-sm">
+               <thead className="bg-slate-50 border-b">
+                 <tr>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Faculty Name</th>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Subject</th>
+                   <th className="px-4 py-3 font-semibold text-slate-700">Class Context</th>
+                   <th className="px-4 py-3 text-right">Remove</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-slate-100">
+                 {assignments.map(a => {
+                   const fac = faculty.find(f => f.uid === a.facultyId);
+                   const sub = subjects.find(s => s.id === a.subjectId);
+                   const br = branches.find(b => b.id === a.branchId);
+                   const ba = batches.find(b => b.id === a.batchId);
+
+                   return (
+                    <tr key={a.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-900">
+                        <div className="flex items-center">
+                          <div className="h-6 w-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs mr-2 font-bold">
+                            {fac?.displayName.charAt(0)}
+                          </div>
+                          {fac?.displayName || 'Unknown'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{sub?.name} <span className="text-slate-400 text-xs">({sub?.code})</span></td>
+                      <td className="px-4 py-3 text-slate-600">
+                        <span className="bg-slate-100 px-2 py-0.5 rounded text-xs border border-slate-200">
+                          {br?.name} &bull; {ba?.name}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => handleDeleteAssignment(a.id)} className="text-slate-400 hover:text-red-600 transition">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                   );
+                 })}
+                 {assignments.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No active assignments.</td></tr>}
+               </tbody>
+             </table>
+          </div>
+        </Card>
+      )}
+
+      {/* MODAL: Edit Subject */}
+      <Modal isOpen={!!editSubject} onClose={() => setEditSubject(null)} title="Edit Subject">
+         <div className="space-y-4">
+            <Input 
+              label="Subject Name" 
+              value={editSubject?.name || ''} 
+              onChange={e => setEditSubject(prev => prev ? ({...prev, name: e.target.value}) : null)} 
+            />
+            <Input 
+              label="Subject Code" 
+              value={editSubject?.code || ''} 
+              onChange={e => setEditSubject(prev => prev ? ({...prev, code: e.target.value}) : null)} 
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="secondary" onClick={() => setEditSubject(null)}>Cancel</Button>
+              <Button onClick={handleUpdateSubject}>Save Changes</Button>
+            </div>
+         </div>
+      </Modal>
+
+      {/* MODAL: View Faculty Assignments */}
+      <Modal isOpen={!!viewFacAssignments} onClose={() => setViewFacAssignments(null)} title="Assigned Classes">
+         <div className="space-y-4">
+           {viewFacAssignments && (
+             <div className="border rounded-md overflow-hidden">
+               <table className="w-full text-sm">
+                 <thead className="bg-slate-50 border-b">
+                   <tr>
+                     <th className="px-3 py-2 text-left">Subject</th>
+                     <th className="px-3 py-2 text-left">Class</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y">
+                   {getFacultyAssignments(viewFacAssignments).map(a => {
+                     const sub = subjects.find(s => s.id === a.subjectId);
+                     const br = branches.find(b => b.id === a.branchId);
+                     const ba = batches.find(b => b.id === a.batchId);
+                     return (
+                       <tr key={a.id}>
+                         <td className="px-3 py-2">
+                           <div className="font-medium text-slate-900">{sub?.name}</div>
+                           <div className="text-xs text-slate-500">{sub?.code}</div>
+                         </td>
+                         <td className="px-3 py-2 text-slate-600">
+                           {br?.name} <span className="text-slate-300">|</span> {ba?.name}
+                         </td>
+                       </tr>
+                     );
+                   })}
+                   {getFacultyAssignments(viewFacAssignments).length === 0 && (
+                     <tr><td colSpan={2} className="p-4 text-center text-slate-500">No classes assigned.</td></tr>
+                   )}
+                 </tbody>
+               </table>
+             </div>
+           )}
+           <div className="flex justify-end">
+             <Button variant="secondary" onClick={() => setViewFacAssignments(null)}>Close</Button>
+           </div>
+         </div>
+      </Modal>
     </div>
   );
 };

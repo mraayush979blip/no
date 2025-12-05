@@ -1,6 +1,6 @@
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithEmailAndPassword, signOut, User as FirebaseUser } from "firebase/auth";
-import { getFirestore, collection, getDocs, doc, setDoc, query, where, addDoc, deleteDoc, getDoc, writeBatch } from "firebase/firestore";
+import { initializeApp, deleteApp, FirebaseApp } from "firebase/app";
+import { getAuth, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword, User as FirebaseUser } from "firebase/auth";
+import { getFirestore, collection, getDocs, doc, setDoc, query, where, addDoc, deleteDoc, getDoc, writeBatch, updateDoc } from "firebase/firestore";
 import { User, Branch, Batch, Subject, FacultyAssignment, AttendanceRecord, UserRole } from "../types";
 import { SEED_BRANCHES, SEED_BATCHES, SEED_SUBJECTS, SEED_USERS, SEED_ASSIGNMENTS } from "../constants";
 
@@ -15,7 +15,7 @@ const firebaseConfig = {
   appId: "1:917626092892:web:33637e585e836eeb771599"
 };
 
-// Initialize Firebase
+// Initialize Firebase (Primary App)
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const firestore = getFirestore(app);
@@ -38,13 +38,16 @@ interface IDataService {
   // Users
   getStudents: (branchId: string, batchId: string) => Promise<User[]>;
   createStudent: (data: Partial<User>) => Promise<void>;
+  importStudents: (students: Partial<User>[]) => Promise<void>;
   deleteUser: (uid: string) => Promise<void>;
   
   getSubjects: () => Promise<Subject[]>;
   addSubject: (name: string, code: string) => Promise<void>;
+  updateSubject: (id: string, name: string, code: string) => Promise<void>;
   deleteSubject: (id: string) => Promise<void>;
   
   getFaculty: () => Promise<User[]>;
+  createFaculty: (data: Partial<User>) => Promise<void>;
   getAssignments: (facultyId?: string) => Promise<FacultyAssignment[]>;
   assignFaculty: (data: Omit<FacultyAssignment, 'id'>) => Promise<void>;
   removeAssignment: (id: string) => Promise<void>;
@@ -61,6 +64,35 @@ interface IDataService {
 // --- Firebase Implementation ---
 class FirebaseService implements IDataService {
   
+  // Helper: Create Auth user without logging out the admin
+  // We use a secondary app instance to handle the creation
+  private async createAuthUser(email: string, pass: string = "password123"): Promise<string> {
+    let secondApp: FirebaseApp | null = null;
+    try {
+      // Initialize a secondary app instance
+      secondApp = initializeApp(firebaseConfig, "SecondaryApp");
+      const secondAuth = getAuth(secondApp);
+      
+      // Create the user on the secondary instance
+      const cred = await createUserWithEmailAndPassword(secondAuth, email, pass);
+      
+      // Sign out immediately from the secondary instance to be safe
+      await signOut(secondAuth);
+      
+      return cred.user.uid;
+    } catch (e: any) {
+      if (e.code === 'auth/email-already-in-use') {
+        throw new Error(`Email ${email} is already in use.`);
+      }
+      throw e;
+    } finally {
+      // Clean up the secondary app instance
+      if (secondApp) {
+        await deleteApp(secondApp);
+      }
+    }
+  }
+
   async login(email: string, pass: string): Promise<User> {
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const uid = cred.user.uid;
@@ -150,13 +182,44 @@ class FirebaseService implements IDataService {
   }
 
   async createStudent(data: Partial<User>): Promise<void> {
-    // Note: We only create the Firestore profile here. 
-    // In a real app, you'd use Firebase Admin SDK to create the Auth account.
-    const ref = doc(collection(firestore, "users"));
-    await setDoc(ref, { ...data, uid: ref.id, role: UserRole.STUDENT });
+    if (!data.email) throw new Error("Email is required");
+    
+    // Default password is Enrollment ID, fallback to password123 if missing
+    const password = data.studentData?.enrollmentId || "password123";
+    
+    // 1. Create Auth User (Real)
+    const newUid = await this.createAuthUser(data.email, password);
+    
+    // 2. Create Firestore Profile with matching UID
+    const ref = doc(firestore, "users", newUid);
+    await setDoc(ref, { ...data, uid: newUid, role: UserRole.STUDENT });
+  }
+
+  async importStudents(students: Partial<User>[]): Promise<void> {
+    // We must do this sequentially to handle the Auth creation safely
+    // In a real app, this should be a Cloud Function to run faster and cleaner
+    for (const s of students) {
+      if (s.email) {
+        try {
+          const password = s.studentData?.enrollmentId || "password123";
+          
+          // 1. Create Auth
+          const newUid = await this.createAuthUser(s.email, password);
+          
+          // 2. Create Profile
+          const ref = doc(firestore, "users", newUid);
+          await setDoc(ref, { ...s, uid: newUid, role: UserRole.STUDENT });
+        } catch (e) {
+          console.error(`Failed to import student ${s.email}:`, e);
+          // Continue to next student even if one fails
+        }
+      }
+    }
   }
 
   async deleteUser(uid: string): Promise<void> {
+    // Note: Client SDK cannot delete Auth users easily without being logged in as them.
+    // This only deletes the profile. Admin must manually delete from Console to fully cleanup.
     await deleteDoc(doc(firestore, "users", uid));
   }
 
@@ -164,6 +227,17 @@ class FirebaseService implements IDataService {
     const q = query(collection(firestore, "users"), where("role", "==", UserRole.FACULTY));
     const snap = await getDocs(q);
     return snap.docs.map(d => d.data() as User);
+  }
+
+  async createFaculty(data: Partial<User>): Promise<void> {
+    if (!data.email) throw new Error("Email is required");
+    
+    // 1. Create Auth User
+    const newUid = await this.createAuthUser(data.email, "password123");
+
+    // 2. Create Profile
+    const ref = doc(firestore, "users", newUid);
+    await setDoc(ref, { ...data, uid: newUid, role: UserRole.FACULTY });
   }
 
   // --- Subjects & Assignments ---
@@ -175,6 +249,11 @@ class FirebaseService implements IDataService {
   async addSubject(name: string, code: string): Promise<void> {
     const ref = doc(collection(firestore, "subjects"));
     await setDoc(ref, { id: ref.id, name, code });
+  }
+
+  async updateSubject(id: string, name: string, code: string): Promise<void> {
+    const ref = doc(firestore, "subjects", id);
+    await updateDoc(ref, { name, code });
   }
 
   async deleteSubject(id: string): Promise<void> {
@@ -335,6 +414,13 @@ class MockService implements IDataService {
     users.push({ ...data, uid: `stu_${Date.now()}`, role: UserRole.STUDENT });
     this.save('ams_users', users);
   }
+  async importStudents(students: Partial<User>[]): Promise<void> {
+    const users = this.load('ams_users', SEED_USERS);
+    students.forEach((s, idx) => {
+      users.push({ ...s, uid: `stu_${Date.now()}_${idx}`, role: UserRole.STUDENT });
+    });
+    this.save('ams_users', users);
+  }
   async deleteUser(uid: string): Promise<void> {
     const users = this.load('ams_users', SEED_USERS);
     this.save('ams_users', users.filter((u: User) => u.uid !== uid));
@@ -348,6 +434,14 @@ class MockService implements IDataService {
     subs.push({ id: `sub_${Date.now()}`, name, code });
     this.save('ams_subjects', subs);
   }
+  async updateSubject(id: string, name: string, code: string): Promise<void> {
+    const subs = this.load('ams_subjects', SEED_SUBJECTS);
+    const idx = subs.findIndex((s: Subject) => s.id === id);
+    if (idx !== -1) {
+      subs[idx] = { ...subs[idx], name, code };
+      this.save('ams_subjects', subs);
+    }
+  }
   async deleteSubject(id: string): Promise<void> {
     const subs = this.load('ams_subjects', SEED_SUBJECTS);
     this.save('ams_subjects', subs.filter((s: Subject) => s.id !== id));
@@ -355,6 +449,11 @@ class MockService implements IDataService {
   async getFaculty(): Promise<User[]> {
     const users = this.load('ams_users', SEED_USERS) as User[];
     return users.filter(u => u.role === UserRole.FACULTY);
+  }
+  async createFaculty(data: Partial<User>): Promise<void> {
+    const users = this.load('ams_users', SEED_USERS);
+    users.push({ ...data, uid: `fac_${Date.now()}`, role: UserRole.FACULTY });
+    this.save('ams_users', users);
   }
   async getAssignments(facultyId?: string): Promise<FacultyAssignment[]> {
     const assigns = this.load('ams_assignments', SEED_ASSIGNMENTS) as FacultyAssignment[];

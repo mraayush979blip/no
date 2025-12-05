@@ -13,6 +13,7 @@ export interface User {
     branchId: string;
     batchId: string;
     enrollmentId: string;
+    rollNo?: string;
   };
 }
 
