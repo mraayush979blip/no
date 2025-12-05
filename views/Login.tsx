@@ -23,17 +23,17 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       onLogin(user);
     } catch (err: any) {
       console.error(err);
-      // Show detailed error if using Firebase to help debugging
-      if (process.env.API_KEY) {
-        if (err.code === 'auth/invalid-api-key') {
-          setError("Config Error: Your API Key does not match your Firebase Project. Please check services/db.ts");
-        } else if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-          setError("Invalid email or password. Check Firebase Console Authentication.");
-        } else {
-          setError(err.message || "Login failed. Check console for details.");
-        }
+      // Check for specific Firebase error codes safely
+      if (err.code === 'auth/invalid-api-key') {
+        setError("Config Error: Your API Key does not match your Firebase Project. Please check services/db.ts");
+      } else if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        setError("Invalid email or password. Check Firebase Console Authentication.");
+      } else if (err.code) {
+        // Any other firebase error
+        setError(err.message || "Login failed. Check console for details.");
       } else {
-        setError("Invalid email or password. (Mock Mode)");
+        // Fallback or Mock mode error
+        setError("Invalid email or password.");
       }
     } finally {
       setLoading(false);
