@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { db } from '../services/db';
 import { User } from '../types';
-import { Button, Card, Input } from '../components/UI';
-import { GraduationCap, Lock, Mail } from 'lucide-react';
+import { Button, Card, Input, AcropolisLogo } from '../components/UI';
+import { Lock, Mail } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -44,8 +44,8 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-200 to-indigo-100 p-4">
       <Card className="w-full max-w-md shadow-xl border-t-4 border-indigo-600 relative">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-indigo-100 mb-4">
-            <GraduationCap className="h-8 w-8 text-indigo-600" />
+          <div className="inline-flex items-center justify-center h-24 w-24 mb-2 bg-indigo-50 rounded-full p-4 shadow-sm">
+             <AcropolisLogo className="h-full w-full" />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Acropolis AMS</h1>
           <p className="text-slate-600 mt-2">Sign in to your account</p>

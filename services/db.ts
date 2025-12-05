@@ -48,6 +48,7 @@ interface IDataService {
   
   getFaculty: () => Promise<User[]>;
   createFaculty: (data: Partial<User>, password?: string) => Promise<void>;
+  resetFacultyPassword: (uid: string, newPass: string) => Promise<void>; // NEW
   getAssignments: (facultyId?: string) => Promise<FacultyAssignment[]>;
   assignFaculty: (data: Omit<FacultyAssignment, 'id'>) => Promise<void>;
   removeAssignment: (id: string) => Promise<void>;
@@ -82,7 +83,7 @@ class FirebaseService implements IDataService {
       return cred.user.uid;
     } catch (e: any) {
       if (e.code === 'auth/email-already-in-use') {
-        throw new Error(`Email ${email} is already in use. Please check Firebase Console or delete the user manually if re-adding.`);
+        throw new Error(`Email ${email} is already in use.`);
       }
       throw e;
     } finally {
@@ -241,6 +242,45 @@ class FirebaseService implements IDataService {
     await setDoc(ref, { ...data, uid: newUid, role: UserRole.FACULTY });
   }
 
+  async resetFacultyPassword(uid: string, newPass: string): Promise<void> {
+    // 1. Fetch old profile
+    const userRef = doc(firestore, "users", uid);
+    const userSnap = await getDoc(userRef);
+    if (!userSnap.exists()) throw new Error("User profile not found");
+    const userData = userSnap.data() as User;
+
+    let newUid: string;
+    try {
+      // 2. Try to create new Auth user
+      newUid = await this.createAuthUser(userData.email, newPass);
+    } catch (e: any) {
+      // If email exists, we can't overwrite it from client.
+      if (e.message && e.message.includes("already in use")) {
+        throw new Error("ACCOUNT LOCKED: To reset this password, you must FIRST delete this user from the Firebase Console (Authentication Tab) manually. Then try again.");
+      }
+      throw e;
+    }
+
+    // 3. Migrate Data
+    const batch = writeBatch(firestore);
+    
+    // A. Create New Profile
+    const newProfileRef = doc(firestore, "users", newUid);
+    batch.set(newProfileRef, { ...userData, uid: newUid });
+
+    // B. Migrate Assignments to new UID
+    const q = query(collection(firestore, "assignments"), where("facultyId", "==", uid));
+    const assignments = await getDocs(q);
+    assignments.forEach(a => {
+        batch.update(a.ref, { facultyId: newUid });
+    });
+
+    // C. Delete Old Profile
+    batch.delete(userRef);
+
+    await batch.commit();
+  }
+
   // --- Subjects & Assignments ---
   async getSubjects(): Promise<Subject[]> {
     const snap = await getDocs(collection(firestore, "subjects"));
@@ -366,6 +406,11 @@ class MockService implements IDataService {
     const users = this.load('ams_users', SEED_USERS) as User[];
     const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (user) {
+      // Check stored password if present, otherwise ignore (assuming seeded or default)
+      const storedPass = (user as any).password;
+      if (storedPass && storedPass !== pass) {
+        throw new Error("Invalid credentials");
+      }
       localStorage.setItem('ams_current_user', JSON.stringify(user));
       return user;
     }
@@ -454,8 +499,17 @@ class MockService implements IDataService {
   }
   async createFaculty(data: Partial<User>, password?: string): Promise<void> {
     const users = this.load('ams_users', SEED_USERS);
-    users.push({ ...data, uid: `fac_${Date.now()}`, role: UserRole.FACULTY });
+    // Store password on the user object for Mock
+    users.push({ ...data, uid: `fac_${Date.now()}`, role: UserRole.FACULTY, password: password || "password123" });
     this.save('ams_users', users);
+  }
+  async resetFacultyPassword(uid: string, newPass: string): Promise<void> {
+    const users = this.load('ams_users', SEED_USERS);
+    const idx = users.findIndex((u: User) => u.uid === uid);
+    if (idx !== -1) {
+      users[idx].password = newPass;
+      this.save('ams_users', users);
+    }
   }
   async getAssignments(facultyId?: string): Promise<FacultyAssignment[]> {
     const assigns = this.load('ams_assignments', SEED_ASSIGNMENTS) as FacultyAssignment[];
