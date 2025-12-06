@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../services/db';
-import { Branch, Batch, User, Subject, FacultyAssignment } from '../types';
+import { Branch, Batch, User, Subject, FacultyAssignment, AttendanceRecord } from '../types';
 import { Card, Button, Input, Select, Modal, FileUploader } from '../components/UI';
-import { Plus, Trash2, ChevronRight, Users, BookOpen, AlertCircle, Database, Edit, Eye, Info, Key } from 'lucide-react';
+import { Plus, Trash2, ChevronRight, Users, BookOpen, AlertCircle, Database, Edit, Eye, Info, Key, ArrowLeft, CheckCircle2, XCircle } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'students' | 'faculty'>('students');
@@ -54,6 +54,147 @@ export const AdminDashboard: React.FC = () => {
   );
 };
 
+// --- Sub-View: Student Detail (Attendance) ---
+const AdminStudentDetail: React.FC<{ student: User; onBack: () => void }> = ({ student, onBack }) => {
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [att, subs] = await Promise.all([
+          db.getStudentAttendance(student.uid),
+          db.getSubjects()
+        ]);
+        setAttendance(att);
+        setSubjects(subs);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, [student.uid]);
+
+  const getSubjectStats = (subjectId: string) => {
+    const relevant = attendance.filter(a => a.subjectId === subjectId);
+    const total = relevant.length;
+    const present = relevant.filter(a => a.isPresent).length;
+    const percentage = total === 0 ? 0 : Math.round((present / total) * 100);
+    return { total, present, percentage };
+  };
+
+  // Group attendance by Subject for the stats view
+  const subjectStats = subjects.map(s => {
+    const stats = getSubjectStats(s.id);
+    return { ...s, ...stats };
+  }).filter(s => s.total > 0); // Only show subjects with activity
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full text-slate-600 transition">
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <div>
+            <h3 className="text-xl font-bold text-slate-900">{student.displayName}</h3>
+            <p className="text-sm text-slate-500 font-mono">
+              {student.studentData?.enrollmentId} {student.studentData?.rollNo ? `| Roll: ${student.studentData.rollNo}` : ''}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="p-12 text-center text-slate-500">Loading attendance records...</div>
+      ) : (
+        <div className="space-y-8">
+          {/* Summary Cards */}
+          <div>
+            <h4 className="text-sm font-bold text-slate-700 uppercase mb-3">Attendance Overview</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {subjectStats.map(stat => (
+                <div key={stat.id} className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="font-semibold text-slate-800">{stat.name}</span>
+                    <span className={`text-sm font-bold px-2 py-0.5 rounded ${stat.percentage < 75 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                      {stat.percentage}%
+                    </span>
+                  </div>
+                  <div className="text-sm text-slate-500 flex justify-between">
+                    <span>Attended: {stat.present} / {stat.total}</span>
+                    <span className="font-mono text-xs">{stat.code}</span>
+                  </div>
+                  {/* Mini Progress Bar */}
+                  <div className="w-full bg-slate-200 h-1.5 rounded-full mt-3 overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full ${stat.percentage < 75 ? 'bg-red-500' : 'bg-indigo-500'}`} 
+                      style={{ width: `${stat.percentage}%` }}
+                    ></div>
+                  </div>
+                </div>
+              ))}
+              {subjectStats.length === 0 && (
+                <div className="col-span-full p-4 text-slate-500 italic text-center bg-slate-50 rounded border border-dashed">
+                  No attendance records found for this student.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Detailed Log */}
+          <div>
+            <h4 className="text-sm font-bold text-slate-700 uppercase mb-3">Recent Activity Log</h4>
+            <div className="border border-slate-200 rounded-lg overflow-hidden">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-2 font-semibold text-slate-600">Date</th>
+                    <th className="px-4 py-2 font-semibold text-slate-600">Subject</th>
+                    <th className="px-4 py-2 font-semibold text-slate-600 text-center">Slot</th>
+                    <th className="px-4 py-2 font-semibold text-slate-600 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {[...attendance]
+                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                    .map(r => {
+                      const subject = subjects.find(s => s.id === r.subjectId);
+                      return (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-mono text-slate-600">{r.date}</td>
+                          <td className="px-4 py-2 text-slate-900">
+                            {subject?.name} <span className="text-xs text-slate-400">({subject?.code})</span>
+                          </td>
+                          <td className="px-4 py-2 text-center text-slate-500">L{r.lectureSlot || 1}</td>
+                          <td className="px-4 py-2 text-right">
+                            {r.isPresent ? (
+                              <span className="inline-flex items-center text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-xs font-medium">
+                                <CheckCircle2 className="h-3 w-3 mr-1" /> Present
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center text-red-700 bg-red-50 px-2 py-0.5 rounded text-xs font-medium">
+                                <XCircle className="h-3 w-3 mr-1" /> Absent
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  {attendance.length === 0 && (
+                     <tr><td colSpan={4} className="p-4 text-center text-slate-400">No logs available.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
 // --- Sub-View: Student Management (Hierarchy) ---
 const StudentManagement: React.FC = () => {
   const [level, setLevel] = useState<'branches' | 'batches' | 'students'>('branches');
@@ -63,6 +204,9 @@ const StudentManagement: React.FC = () => {
   
   const [selBranch, setSelBranch] = useState<Branch | null>(null);
   const [selBatch, setSelBatch] = useState<Batch | null>(null);
+
+  // New State for viewing detailed attendance
+  const [viewStudent, setViewStudent] = useState<User | null>(null);
 
   const [newItemName, setNewItemName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -215,6 +359,11 @@ const StudentManagement: React.FC = () => {
     }
   };
 
+  // --- RENDER DETAIL VIEW IF SELECTED ---
+  if (viewStudent) {
+    return <AdminStudentDetail student={viewStudent} onBack={() => setViewStudent(null)} />;
+  }
+
   return (
     <Card>
       {/* Breadcrumb */}
@@ -321,8 +470,17 @@ const StudentManagement: React.FC = () => {
                      <td className="py-3 px-2 font-mono text-sm text-slate-700">{s.studentData?.rollNo || '-'}</td>
                      <td className="py-3 px-2 font-medium text-slate-900">{s.displayName}</td>
                      <td className="py-3 px-2 text-slate-600">{s.email}</td>
-                     <td className="py-3 px-2 text-right">
-                        <button onClick={() => handleDelete(s.uid)} className="text-red-500 hover:text-red-700 opacity-0 group-hover:opacity-100 transition"><Trash2 className="h-4 w-4"/></button>
+                     <td className="py-3 px-2 text-right space-x-2">
+                        <button 
+                          onClick={() => setViewStudent(s)} 
+                          className="text-indigo-500 hover:text-indigo-700 opacity-0 group-hover:opacity-100 transition"
+                          title="View Attendance"
+                        >
+                          <Eye className="h-4 w-4"/>
+                        </button>
+                        <button onClick={() => handleDelete(s.uid)} className="text-red-500 hover:text-red-700 opacity-0 group-hover:opacity-100 transition" title="Delete">
+                          <Trash2 className="h-4 w-4"/>
+                        </button>
                      </td>
                    </tr>
                  ))}

@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../services/db';
 import { User, FacultyAssignment, AttendanceRecord } from '../types';
-import { Card, Button, Select } from '../components/UI';
-import { Calendar, Save, Users, AlertCircle, BookOpen, Check, X, ChevronRight, ArrowLeft, BarChart3, Clock, History, CalendarDays } from 'lucide-react';
+import { Card, Button, Select, Input, Modal } from '../components/UI';
+import { Calendar, Save, Users, AlertCircle, BookOpen, Check, X, ChevronRight, ArrowLeft, BarChart3, Clock, History, CalendarDays, FileSpreadsheet, ExternalLink } from 'lucide-react';
 
 interface FacultyProps {
   user: User;
@@ -43,6 +43,11 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [allClassRecords, setAllClassRecords] = useState<AttendanceRecord[]>([]); // Store raw records for detail view
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<User | null>(null); // For detail view
+  
+  // --- Google Sheets Sync State ---
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [scriptUrl, setScriptUrl] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // 1. Load Initial Data & Assignments
   useEffect(() => {
@@ -293,6 +298,70 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     const newStatus = { ...attendanceStatus };
     students.forEach(s => newStatus[s.uid] = present);
     setAttendanceStatus(newStatus);
+  };
+
+  // --- CSV Export ---
+  const handleExportCSV = () => {
+    if (allClassRecords.length === 0) {
+      alert("No data to export");
+      return;
+    }
+    
+    // Header
+    const headers = ["Date", "Lecture", "Student Name", "Roll No", "Status", "Marked By"];
+    
+    // Data Rows
+    const rows = allClassRecords.map(r => {
+      const s = students.find(stu => stu.uid === r.studentId);
+      return [
+        `"${r.date}"`,
+        `"Lecture ${r.lectureSlot || 1}"`,
+        `"${s?.displayName || 'Unknown'}"`,
+        `"${s?.studentData?.rollNo || s?.studentData?.enrollmentId || '-'}"`,
+        r.isPresent ? 'Present' : 'Absent',
+        `"${user.displayName}"` // Use faculty name
+      ].join(",");
+    });
+    
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Attendance_${metaData.subjects[selSubjectId]?.name}_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // --- Google Sheets Sync ---
+  const handleSyncToSheet = async () => {
+    if (!scriptUrl) return;
+    setIsSyncing(true);
+    try {
+       // Prepare data payload
+       const payload = allClassRecords.map(r => ({
+          date: r.date,
+          studentId: students.find(s => s.uid === r.studentId)?.displayName || r.studentId,
+          subjectId: metaData.subjects[selSubjectId]?.name,
+          isPresent: r.isPresent,
+          markedBy: user.displayName,
+          timestamp: r.timestamp
+       }));
+       
+       await fetch(scriptUrl, {
+         method: 'POST',
+         mode: 'no-cors', // Important for Google Apps Script Webhooks
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(payload)
+       });
+       
+       alert("Sync request sent! Check your Google Sheet in a few seconds.");
+       setIsSyncModalOpen(false);
+    } catch (e: any) {
+       alert("Sync failed: " + e.message);
+    } finally {
+       setIsSyncing(false);
+    }
   };
 
   const presentCount = Object.values(attendanceStatus).filter(Boolean).length;
@@ -569,8 +638,11 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                       <History className="h-5 w-5 mr-2 text-blue-600" /> 
                       Attendance History
                     </h3>
-                    <div className="text-sm text-slate-500">
-                      Click on a student to view calendar
+                    <div className="flex gap-2">
+                       {/* REMOVED: Google Sheets Sync Button */}
+                       <Button variant="secondary" onClick={handleExportCSV} className="flex items-center text-xs px-3 py-1.5 h-8">
+                         <Save className="h-3 w-3 mr-1.5" /> CSV
+                       </Button>
                     </div>
                  </div>
 
@@ -720,6 +792,35 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
              )}
           </div>
         )}
+        
+        {/* SYNC TO GOOGLE SHEETS MODAL */}
+        <Modal isOpen={isSyncModalOpen} onClose={() => setIsSyncModalOpen(false)} title="Sync to Google Sheets">
+          <div className="space-y-4">
+             <div className="bg-indigo-50 border border-indigo-100 p-3 rounded text-sm text-indigo-800">
+                <p className="font-bold mb-1">Setup Instructions:</p>
+                <ol className="list-decimal pl-4 space-y-1">
+                  <li>Create a new Google Sheet.</li>
+                  <li>Go to <strong>Extensions {'>'} Apps Script</strong>.</li>
+                  <li>Paste the script (ask admin for code).</li>
+                  <li>Deploy as <strong>Web App</strong> (Execute as: Me, Access: Anyone).</li>
+                  <li>Copy the URL and paste it below.</li>
+                </ol>
+             </div>
+             <Input 
+               label="Web App URL" 
+               placeholder="https://script.google.com/macros/s/..." 
+               value={scriptUrl} 
+               onChange={e => setScriptUrl(e.target.value)} 
+             />
+             <div className="flex justify-end gap-2 pt-2">
+               <Button variant="secondary" onClick={() => setIsSyncModalOpen(false)} disabled={isSyncing}>Cancel</Button>
+               <Button onClick={handleSyncToSheet} disabled={!scriptUrl || isSyncing} className="flex items-center">
+                  {isSyncing ? 'Syncing...' : 'Sync Now'}
+                  {!isSyncing && <ExternalLink className="h-4 w-4 ml-2" />}
+               </Button>
+             </div>
+          </div>
+        </Modal>
 
       </div>
     );

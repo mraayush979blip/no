@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { db } from '../services/db';
 import { User } from '../types';
 import { Button, Card, Input, AcropolisLogo } from '../components/UI';
-import { Lock, Mail } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -11,6 +11,7 @@ interface LoginProps {
 export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -72,13 +73,21 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="relative">
             <Lock className="absolute left-3 top-3 h-5 w-5 text-slate-400" />
             <Input 
-              type="password" 
+              type={showPassword ? 'text' : 'password'} 
               placeholder="Password" 
-              className="pl-10" 
+              className="pl-10 pr-10" 
               required 
               value={password}
               onChange={e => setPassword(e.target.value)}
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 focus:outline-none"
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+            </button>
           </div>
 
           <Button type="submit" className="w-full py-2.5 mt-2" disabled={loading}>
