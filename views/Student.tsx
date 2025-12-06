@@ -56,18 +56,33 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
 
   useEffect(() => {
     const loadData = async () => {
-      // 1. Get all subjects (in a real app, we filter by branch)
-      const allSubs = await db.getSubjects();
-      setSubjects(allSubs);
+      // 1. Get user context
+      const branchId = user.studentData?.branchId;
+      const batchId = user.studentData?.batchId;
 
-      // 2. Get my attendance
+      if (!branchId || !batchId) {
+        setLoading(false);
+        return;
+      }
+
+      // 2. Fetch assignments to determine subjects for this specific class
+      const allAssignments = await db.getAssignments();
+      const myClassAssignments = allAssignments.filter(a => a.branchId === branchId && a.batchId === batchId);
+      const mySubjectIds = new Set(myClassAssignments.map(a => a.subjectId));
+
+      // 3. Get all subjects and filter only those assigned to this class
+      const allSubs = await db.getSubjects();
+      const mySubjects = allSubs.filter(s => mySubjectIds.has(s.id));
+      setSubjects(mySubjects);
+
+      // 4. Get my attendance
       const myAtt = await db.getStudentAttendance(user.uid);
       setAttendance(myAtt);
       
       setLoading(false);
     };
     loadData();
-  }, [user.uid]);
+  }, [user.uid, user.studentData]);
 
   const calculateStats = (subjectId: string) => {
     const relevant = attendance.filter(a => a.subjectId === subjectId);
@@ -94,52 +109,58 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {subjects.map(subject => {
-          const { total, present, percentage } = calculateStats(subject.id);
-          const isLow = percentage < 75;
-          const statusColor = isLow ? 'text-red-600' : 'text-emerald-600';
-          
-          // Demo fallback for display (if 0 records, show 100% or 0%)
-          const dispPercent = total === 0 ? 0 : percentage; 
+        {subjects.length > 0 ? (
+          subjects.map(subject => {
+            const { total, present, percentage } = calculateStats(subject.id);
+            const isLow = percentage < 75;
+            const statusColor = isLow ? 'text-red-600' : 'text-emerald-600';
+            
+            // Demo fallback for display (if 0 records, show 0% clearly)
+            const dispPercent = total === 0 ? 0 : percentage; 
 
-          return (
-            <Card key={subject.id} className="relative overflow-hidden transition-shadow hover:shadow-md border border-slate-200">
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                   <h3 className="font-bold text-slate-900 text-lg leading-tight mb-1">{subject.name}</h3>
-                   <span className="text-xs font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded">{subject.code}</span>
+            return (
+              <Card key={subject.id} className="relative overflow-hidden transition-shadow hover:shadow-md border border-slate-200">
+                <div className="flex justify-between items-start mb-6">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-lg leading-tight mb-1">{subject.name}</h3>
+                    <span className="text-xs font-mono text-slate-500 bg-slate-100 px-2 py-0.5 rounded">{subject.code}</span>
+                  </div>
+                  {/* Circular Chart */}
+                  <CircularProgress 
+                    percentage={dispPercent} 
+                    size={60} 
+                    strokeWidth={5} 
+                    colorClass={isLow && total > 0 ? 'text-red-500' : 'text-indigo-600'} 
+                  />
                 </div>
-                {/* Circular Chart */}
-                <CircularProgress 
-                  percentage={dispPercent} 
-                  size={60} 
-                  strokeWidth={5} 
-                  colorClass={isLow && total > 0 ? 'text-red-500' : 'text-indigo-600'} 
-                />
-              </div>
 
-              {/* Stats Grid */}
-              <div className="bg-slate-50 rounded-lg p-3 grid grid-cols-2 gap-4 border border-slate-100">
-                <div>
-                   <p className="text-xs text-slate-500 uppercase font-semibold">Attended</p>
-                   <p className="text-lg font-bold text-slate-800">{present} <span className="text-xs text-slate-400 font-normal">/ {total}</span></p>
+                {/* Stats Grid */}
+                <div className="bg-slate-50 rounded-lg p-3 grid grid-cols-2 gap-4 border border-slate-100">
+                  <div>
+                    <p className="text-xs text-slate-500 uppercase font-semibold">Attended</p>
+                    <p className="text-lg font-bold text-slate-800">{present} <span className="text-xs text-slate-400 font-normal">/ {total}</span></p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-500 uppercase font-semibold">Status</p>
+                    <div className={`inline-flex items-center text-sm font-bold ${statusColor}`}>
+                      {total === 0 ? (
+                        <span className="text-slate-400 font-normal italic">No data</span>
+                      ) : isLow ? (
+                        <><AlertCircle className="h-4 w-4 mr-1" /> Low</>
+                      ) : (
+                        <><CheckCircle2 className="h-4 w-4 mr-1" /> On Track</>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-right">
-                   <p className="text-xs text-slate-500 uppercase font-semibold">Status</p>
-                   <div className={`inline-flex items-center text-sm font-bold ${statusColor}`}>
-                     {total === 0 ? (
-                       <span className="text-slate-400 font-normal italic">No data</span>
-                     ) : isLow ? (
-                       <><AlertCircle className="h-4 w-4 mr-1" /> Low</>
-                     ) : (
-                       <><CheckCircle2 className="h-4 w-4 mr-1" /> On Track</>
-                     )}
-                   </div>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
+              </Card>
+            );
+          })
+        ) : (
+          <div className="col-span-full text-center py-12 text-slate-500 bg-white rounded-lg border border-dashed border-slate-300">
+            No subjects have been assigned to your class yet.
+          </div>
+        )}
       </div>
     </div>
   );
