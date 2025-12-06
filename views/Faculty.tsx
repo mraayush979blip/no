@@ -151,7 +151,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const availableBatches = useMemo(() => {
     const relevant = assignments.filter(a => a.branchId === selBranchId);
     const hasAll = relevant.some(a => a.batchId === 'ALL');
-    const ids = Array.from(new Set(relevant.map(a => a.batchId).filter(id => id !== 'ALL')));
+    // Filter out 'ALL' and valid IDs
+    const ids = Array.from(new Set(relevant.map(a => a.batchId).filter(id => id && id !== 'ALL')));
     const options = ids.map(id => ({ id, name: metaData.batches[id] || 'Unknown Batch' }));
     
     if (hasAll) {
@@ -165,10 +166,13 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
         a.branchId === selBranchId && 
         (a.batchId === selBatchId || a.batchId === 'ALL')
     );
-    return relevant.map(a => ({ 
-      id: a.subjectId, 
-      name: metaData.subjects[a.subjectId]?.name, 
-      code: metaData.subjects[a.subjectId]?.code 
+    // Deduplicate logic using Set on Subject IDs
+    const uniqueSubjectIds = Array.from(new Set(relevant.map(a => a.subjectId).filter(Boolean)));
+    
+    return uniqueSubjectIds.map(sid => ({ 
+      id: sid, 
+      name: metaData.subjects[sid]?.name, 
+      code: metaData.subjects[sid]?.code 
     }));
   }, [assignments, selBranchId, selBatchId, metaData]);
 
@@ -177,8 +181,12 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const selectBatch = (id: string) => {
     setSelBatchId(id);
     const relevantAssignments = assignments.filter(a => a.branchId === selBranchId && (a.batchId === id || a.batchId === 'ALL'));
-    if (relevantAssignments.length === 1) {
-      setSelSubjectId(relevantAssignments[0].subjectId);
+    
+    // Check for unique subjects to handle auto-skip properly
+    const uniqueSubjectIds = new Set(relevantAssignments.map(a => a.subjectId));
+    
+    if (uniqueSubjectIds.size === 1) {
+      setSelSubjectId(Array.from(uniqueSubjectIds)[0]);
       setStep('DASHBOARD');
       setMode('MENU');
     } else {
@@ -413,7 +421,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                  <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
                     {/* Header */}
                     <div className="bg-white p-4 border-b flex justify-between items-center">
-                       <h3 className="font-bold flex items-center"><History className="h-5 w-5 mr-2 text-blue-600"/> History</h3>
+                       <h3 className="font-bold flex items-center text-slate-900"><History className="h-5 w-5 mr-2 text-blue-600"/> History</h3>
                        <Button variant="secondary" onClick={handleExportCSV} className="text-xs h-8">CSV</Button>
                     </div>
                     {/* Table */}
@@ -432,7 +440,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                ) : (
                   // Detail View
                   <div className="bg-white p-6 rounded-lg shadow-sm border border-slate-200">
-                      <h2 className="text-xl font-bold mb-4">{selectedStudent.displayName}</h2>
+                      <h2 className="text-xl font-bold mb-4 text-slate-900">{selectedStudent.displayName}</h2>
                       {/* Log Table */}
                       <table className="w-full text-sm text-left"><thead className="bg-slate-50 border-b"><tr><th className="p-2 text-slate-900">Date</th><th className="p-2 text-slate-900">Lec</th><th className="p-2 text-right text-slate-900">Status</th></tr></thead>
                         <tbody>{allClassRecords.filter(r=>r.studentId===selectedStudent.uid).sort((a,b)=>new Date(b.date).getTime()-new Date(a.date).getTime()).map(r=>(
