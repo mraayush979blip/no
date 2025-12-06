@@ -520,9 +520,17 @@ class MockService implements IDataService {
   async saveAttendance(records: AttendanceRecord[]): Promise<void> {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
     if (records.length > 0) {
-      const sample = records[0];
-      const filtered = all.filter(a => !(a.date === sample.date && a.subjectId === sample.subjectId && a.batchId === sample.batchId));
-      const combined = [...filtered, ...records];
+      // Use a Map for robust upserting by ID (prevents accidental deletions in mixed batches)
+      const recordMap = new Map<string, AttendanceRecord>();
+      
+      // Load existing records
+      all.forEach(r => recordMap.set(r.id, r));
+      
+      // Upsert new records
+      records.forEach(r => recordMap.set(r.id, r));
+      
+      // Convert back to array
+      const combined = Array.from(recordMap.values());
       this.save('ams_attendance', combined);
     }
   }

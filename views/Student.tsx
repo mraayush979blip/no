@@ -66,13 +66,17 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
       }
 
       // 2. Fetch assignments to determine subjects for this specific class
+      // We strictly filter assignments to match the student's Branch AND Batch.
       const allAssignments = await db.getAssignments();
       const myClassAssignments = allAssignments.filter(a => a.branchId === branchId && a.batchId === batchId);
       const mySubjectIds = new Set(myClassAssignments.map(a => a.subjectId));
 
       // 3. Get all subjects and filter only those assigned to this class
       const allSubs = await db.getSubjects();
-      const mySubjects = allSubs.filter(s => mySubjectIds.has(s.id));
+      const mySubjects = allSubs
+        .filter(s => mySubjectIds.has(s.id))
+        .sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically for better UX
+
       setSubjects(mySubjects);
 
       // 4. Get my attendance

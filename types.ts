@@ -53,4 +53,5 @@ export interface AttendanceRecord {
   isPresent: boolean;
   markedBy: string; // Faculty UID
   timestamp: number;
+  lectureSlot?: number; // 1 to 7
 }

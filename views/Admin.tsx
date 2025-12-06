@@ -535,7 +535,7 @@ const FacultyManagement: React.FC = () => {
                 <div className="flex-grow">
                   <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Subject Name</label>
                   <input 
-                    className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none text-slate-900 bg-white"
                     placeholder="e.g. Data Structures"
                     value={newSub.name}
                     onChange={e => setNewSub({...newSub, name: e.target.value})}
@@ -544,7 +544,7 @@ const FacultyManagement: React.FC = () => {
                 <div className="w-32">
                   <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">Code</label>
                   <input 
-                    className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none text-slate-900 bg-white"
                     placeholder="CS-101"
                     value={newSub.code}
                     onChange={e => setNewSub({...newSub, code: e.target.value})}

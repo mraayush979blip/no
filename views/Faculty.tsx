@@ -34,6 +34,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [students, setStudents] = useState<User[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedSlots, setSelectedSlots] = useState<number[]>([1]); // Changed from lectureSlot (number) to array
   const [attendanceStatus, setAttendanceStatus] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState('');
 
@@ -79,7 +80,15 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       const loadClass = async () => {
         setLoadingStudents(true);
         const data = await db.getStudents(selBranchId, selBatchId);
-        setStudents(data);
+        
+        // SORT STUDENTS BY ROLL NO
+        const sortedData = data.sort((a, b) => {
+           const rollA = a.studentData?.rollNo || a.studentData?.enrollmentId || '';
+           const rollB = b.studentData?.rollNo || b.studentData?.enrollmentId || '';
+           return rollA.localeCompare(rollB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+        
+        setStudents(sortedData);
         setLoadingStudents(false);
       };
       loadClass();
@@ -90,20 +99,29 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   useEffect(() => {
     if (mode === 'MARK' && step === 'DASHBOARD') {
       const fetchDailyRecord = async () => {
+        // Fetch all records for this date/subject
         const records = await db.getAttendance(selBranchId, selBatchId, selSubjectId, attendanceDate);
+        
         const statusMap: Record<string, boolean> = {};
         
-        // Default to true (Present) for all students if no record exists
+        // Default to true (Present) for all students
         students.forEach(s => statusMap[s.uid] = true);
         
-        // Overwrite with existing records
-        records.forEach(r => statusMap[r.studentId] = r.isPresent);
+        // Filter records for the selected lecture slots
+        // If multiple slots selected, use status from ANY of them (simple view)
+        // Ideally, if a student is Present in L1 but Absent in L2, what to show?
+        // We will prioritize showing records from the first selected slot if available.
+        if (selectedSlots.length > 0) {
+           const primarySlot = selectedSlots[0];
+           const currentSlotRecords = records.filter(r => (r.lectureSlot || 1) === primarySlot);
+           currentSlotRecords.forEach(r => statusMap[r.studentId] = r.isPresent);
+        }
         
         setAttendanceStatus(statusMap);
       };
       fetchDailyRecord();
     }
-  }, [mode, attendanceDate, students, selBranchId, selBatchId, selSubjectId]);
+  }, [mode, attendanceDate, selectedSlots, students, selBranchId, selBatchId, selSubjectId]);
 
   // 4. Load History Stats
   useEffect(() => {
@@ -218,24 +236,47 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   };
 
   // --- Marking Handlers ---
+  const handleToggleSlot = (num: number) => {
+    setSelectedSlots(prev => {
+      if (prev.includes(num)) {
+        // Prevent deselecting all if only 1 is selected
+        if (prev.length === 1) return prev; 
+        return prev.filter(n => n !== num);
+      } else {
+        return [...prev, num].sort((a,b) => a - b);
+      }
+    });
+  };
+
   const handleSave = async () => {
+    if (selectedSlots.length === 0) {
+      alert("Please select at least one lecture slot.");
+      return;
+    }
     const previousMessage = message;
     setMessage('Saving...');
     try {
-      const records: AttendanceRecord[] = students.map(s => ({
-        id: `${attendanceDate}_${s.uid}_${selSubjectId}`,
-        date: attendanceDate,
-        studentId: s.uid,
-        subjectId: selSubjectId,
-        branchId: selBranchId,
-        batchId: selBatchId,
-        facultyId: user.uid,
-        isPresent: attendanceStatus[s.uid],
-        markedBy: user.uid,
-        timestamp: Date.now()
-      }));
+      const allRecords: AttendanceRecord[] = [];
+      
+      // Generate records for EACH selected slot
+      selectedSlots.forEach(slot => {
+         const slotRecords = students.map(s => ({
+            id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
+            date: attendanceDate,
+            studentId: s.uid,
+            subjectId: selSubjectId,
+            branchId: selBranchId,
+            batchId: selBatchId,
+            facultyId: user.uid,
+            isPresent: attendanceStatus[s.uid],
+            markedBy: user.uid,
+            timestamp: Date.now(),
+            lectureSlot: slot
+         }));
+         allRecords.push(...slotRecords);
+      });
 
-      await db.saveAttendance(records);
+      await db.saveAttendance(allRecords);
       setMessage('✓ Saved');
       setTimeout(() => setMessage(''), 3000);
     } catch (e) {
@@ -418,19 +459,38 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
         {/* MARKING INTERFACE */}
         {mode === 'MARK' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-             <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 mb-4 flex items-center justify-between">
-                <h3 className="font-bold text-lg flex items-center">
+             <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 mb-4 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+                <h3 className="font-bold text-lg flex items-center whitespace-nowrap">
                   <Clock className="h-5 w-5 mr-2 text-indigo-600" /> 
                   Mark Attendance
                 </h3>
-                <div className="flex items-center gap-2">
-                   <span className="text-sm text-slate-500">Date:</span>
-                   <input 
-                    type="date" 
-                    value={attendanceDate}
-                    onChange={e => setAttendanceDate(e.target.value)}
-                    className="border border-slate-300 rounded px-3 py-1 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                   />
+                <div className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center gap-4 w-full lg:w-auto">
+                   <div className="flex items-center gap-2">
+                       <span className="text-sm text-slate-500 font-medium">Date:</span>
+                       <input 
+                        type="date" 
+                        value={attendanceDate}
+                        onChange={e => setAttendanceDate(e.target.value)}
+                        className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-slate-900 bg-white"
+                       />
+                   </div>
+                   <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                       <span className="text-sm text-slate-500 font-medium whitespace-nowrap">Lectures:</span>
+                       <div className="flex gap-1 flex-wrap">
+                        {[1, 2, 3, 4, 5, 6, 7].map(num => {
+                          const isSelected = selectedSlots.includes(num);
+                          return (
+                            <button
+                              key={num}
+                              onClick={() => handleToggleSlot(num)}
+                              className={`w-8 h-8 rounded flex items-center justify-center text-sm font-bold border transition-colors ${isSelected ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-slate-700 border-slate-300 hover:border-indigo-400'}`}
+                            >
+                              {num}
+                            </button>
+                          );
+                        })}
+                       </div>
+                   </div>
                 </div>
              </div>
 
@@ -490,7 +550,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                       </div>
                       <Button onClick={handleSave} className="flex items-center space-x-2 px-6">
                         <Save className="h-4 w-4" />
-                        <span>{message || 'Save Attendance'}</span>
+                        <span>{message || (selectedSlots.length > 1 ? `Save (${selectedSlots.length} Lectures)` : 'Save Attendance')}</span>
                       </Button>
                     </div>
                   </div>
@@ -615,6 +675,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                              <thead className="bg-slate-50 border-b border-slate-200">
                                <tr>
                                  <th className="px-4 py-2 font-semibold text-slate-600">Date</th>
+                                 <th className="px-4 py-2 font-semibold text-slate-600 text-center">Lecture</th>
                                  <th className="px-4 py-2 font-semibold text-slate-600 text-center">Day</th>
                                  <th className="px-4 py-2 font-semibold text-slate-600 text-right">Status</th>
                                </tr>
@@ -632,6 +693,11 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                                      <td className="px-4 py-2">
                                        <span className="font-bold text-slate-800 mr-1">{day} {month}</span>
                                        <span className="text-xs text-slate-400">{year}</span>
+                                     </td>
+                                     <td className="px-4 py-2 text-center">
+                                       <span className="text-xs font-mono bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600">
+                                         L{r.lectureSlot || 1}
+                                       </span>
                                      </td>
                                      <td className="px-4 py-2 text-center text-slate-500">
                                        {weekday}
