@@ -1,3 +1,4 @@
+
 export enum UserRole {
   ADMIN = 'ADMIN',
   FACULTY = 'FACULTY',
@@ -11,6 +12,7 @@ export interface User {
   role: UserRole;
   studentData?: {
     branchId: string;
+    classId: string; // New Level
     batchId: string;
     enrollmentId: string;
     rollNo?: string;
@@ -22,10 +24,17 @@ export interface Branch {
   name: string;
 }
 
-export interface Batch {
+// New Entity
+export interface ClassEntity {
   id: string;
   name: string;
   branchId: string;
+}
+
+export interface Batch {
+  id: string;
+  name: string;
+  classId: string; // Linked to Class, not directly to Branch
 }
 
 export interface Subject {
@@ -39,7 +48,8 @@ export interface FacultyAssignment {
   id: string;
   facultyId: string;
   branchId: string;
-  batchId: string;
+  classId: string; // New Level
+  batchId: string; // 'ALL' or specific batchId
   subjectId: string;
 }
 
@@ -49,6 +59,7 @@ export interface AttendanceRecord {
   studentId: string;
   subjectId: string;
   branchId: string;
+  classId: string; // New Level
   batchId: string;
   isPresent: boolean;
   markedBy: string; // Faculty UID
