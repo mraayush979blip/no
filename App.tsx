@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { db } from './services/db';
 import { User, UserRole } from './types';
@@ -109,37 +110,39 @@ const App: React.FC = () => {
         {renderPortal()}
       </Layout>
 
-      {/* Global Settings Modal */}
-      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Profile Settings">
-         <div className="space-y-4">
-            <h4 className="font-semibold text-slate-800 border-b border-slate-100 pb-2">Change Password</h4>
-            <Input 
-               label="Current Password" 
-               type="password" 
-               value={passForm.current} 
-               onChange={e => setPassForm({...passForm, current: e.target.value})} 
-            />
-            <Input 
-               label="New Password" 
-               type="password" 
-               value={passForm.new} 
-               onChange={e => setPassForm({...passForm, new: e.target.value})}
-               placeholder="Min 6 characters"
-            />
-             <Input 
-               label="Confirm New Password" 
-               type="password" 
-               value={passForm.confirm} 
-               onChange={e => setPassForm({...passForm, confirm: e.target.value})} 
-            />
-            <div className="flex justify-end gap-2 mt-4 pt-2 border-t border-slate-100">
-               <Button variant="secondary" onClick={() => setIsSettingsOpen(false)} disabled={settingsLoading}>Cancel</Button>
-               <Button onClick={handleChangePassword} disabled={!passForm.current || !passForm.new || settingsLoading}>
-                 {settingsLoading ? 'Updating...' : 'Update Password'}
-               </Button>
-            </div>
-         </div>
-      </Modal>
+      {/* Global Settings Modal - Only render if not student */}
+      {user.role !== UserRole.STUDENT && (
+        <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Profile Settings">
+           <div className="space-y-4">
+              <h4 className="font-semibold text-slate-800 border-b border-slate-100 pb-2">Change Password</h4>
+              <Input 
+                 label="Current Password" 
+                 type="password" 
+                 value={passForm.current} 
+                 onChange={e => setPassForm({...passForm, current: e.target.value})} 
+              />
+              <Input 
+                 label="New Password" 
+                 type="password" 
+                 value={passForm.new} 
+                 onChange={e => setPassForm({...passForm, new: e.target.value})}
+                 placeholder="Min 6 characters"
+              />
+               <Input 
+                 label="Confirm New Password" 
+                 type="password" 
+                 value={passForm.confirm} 
+                 onChange={e => setPassForm({...passForm, confirm: e.target.value})} 
+              />
+              <div className="flex justify-end gap-2 mt-4 pt-2 border-t border-slate-100">
+                 <Button variant="secondary" onClick={() => setIsSettingsOpen(false)} disabled={settingsLoading}>Cancel</Button>
+                 <Button onClick={handleChangePassword} disabled={!passForm.current || !passForm.new || settingsLoading}>
+                   {settingsLoading ? 'Updating...' : 'Update Password'}
+                 </Button>
+              </div>
+           </div>
+        </Modal>
+      )}
     </>
   );
 };

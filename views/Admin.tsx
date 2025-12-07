@@ -360,7 +360,7 @@ const FacultyManagement: React.FC = () => {
          </>
        )}
        <Modal isOpen={confirmModalOpen} onClose={()=>setConfirmModalOpen(false)} title="Confirm"><div className="p-4"><p>Confirm Assignment?</p><div className="flex justify-end gap-2 mt-4"><Button onClick={confirmAssignment}>Yes</Button></div></div></Modal>
-       <Modal isOpen={resetModalOpen} onClose={()=>setResetModalOpen(false)} title="Reset Password"><div className="p-4"><Input label="New Password" value={newPasswordInput} onChange={e=>setNewPasswordInput(e.target.value)} /><div className="flex justify-end gap-2 mt-4"><Button onClick={handleResetPassword}>Update</Button></div></div></Modal>
+       <Modal isOpen={resetModalOpen} onClose={()=>setResetModalOpen(false)} title="Reset Password"><div className="p-4"><Input label="New Password" value={newPasswordInput} onChange={e=>setNewPasswordInput(e.target.value)} className="text-slate-900 bg-white" /><div className="flex justify-end gap-2 mt-4"><Button onClick={handleResetPassword}>Update</Button></div></div></Modal>
      </div>
   );
 };

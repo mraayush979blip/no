@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { LogOut, User as UserIcon, Menu, X, ChevronDown, Settings } from 'lucide-react';
 import { User, UserRole } from '../types';
@@ -86,16 +87,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onOpen
                 </div>
                 
                 <div className="p-2">
-                  <button 
-                    onClick={() => {
-                      setIsMenuOpen(false);
-                      onOpenSettings();
-                    }}
-                    className="w-full flex items-center px-4 py-2 text-sm text-slate-700 hover:bg-indigo-50 rounded-md transition-colors"
-                  >
-                    <Settings className="h-4 w-4 mr-3" />
-                    Settings
-                  </button>
+                  {user.role !== UserRole.STUDENT && (
+                    <button 
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        onOpenSettings();
+                      }}
+                      className="w-full flex items-center px-4 py-2 text-sm text-slate-700 hover:bg-indigo-50 rounded-md transition-colors"
+                    >
+                      <Settings className="h-4 w-4 mr-3" />
+                      Settings
+                    </button>
+                  )}
                   <button 
                     onClick={() => {
                       setIsMenuOpen(false);
