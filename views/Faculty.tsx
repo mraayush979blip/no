@@ -2,8 +2,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../services/db';
 import { User, FacultyAssignment, AttendanceRecord, Batch } from '../types';
-import { Button, Select, Card, Modal } from '../components/UI';
-import { Save, Clock, History, FileDown, Filter, ArrowLeft, Calendar, XCircle, CheckCircle2, ChevronDown, Check, X } from 'lucide-react';
+import { Button, Card } from '../components/UI';
+import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle } from 'lucide-react';
 
 interface FacultyProps { user: User; }
 
@@ -37,13 +37,13 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   }>({ branches: {}, batches: {}, subjects: {}, rawBatches: [] });
   const [loadingInit, setLoadingInit] = useState(true);
 
-  // Selection State
+  // Selection State (Top Bar)
   const [selBranchId, setSelBranchId] = useState('');
-  const [selBatchId, setSelBatchId] = useState('');
   const [selSubjectId, setSelSubjectId] = useState('');
   const [activeTab, setActiveTab] = useState<'MARK' | 'HISTORY'>('MARK');
 
-  const [students, setStudents] = useState<User[]>([]);
+  // Marking State
+  const [allBranchStudents, setAllBranchStudents] = useState<User[]>([]); // Cache all students in branch
   const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSlots, setSelectedSlots] = useState<number[]>([1]);
   const [attendanceStatus, setAttendanceStatus] = useState<Record<string, boolean>>({});
@@ -51,9 +51,15 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [allClassRecords, setAllClassRecords] = useState<AttendanceRecord[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Detailed History View State
-  const [viewHistoryStudent, setViewHistoryStudent] = useState<User | null>(null);
+  // Multi-Batch Selection State
+  const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
+  const [isBatchDropdownOpen, setIsBatchDropdownOpen] = useState(false);
 
+  // History State
+  const [viewHistoryStudent, setViewHistoryStudent] = useState<User | null>(null);
+  const [historyFilterDate, setHistoryFilterDate] = useState('');
+
+  // 1. Initialize Data
   useEffect(() => {
     const init = async () => {
       const myAssignments = await db.getAssignments(user.uid);
@@ -81,75 +87,111 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     init();
   }, [user.uid]);
 
-  // Load Students & History
+  // 2. Load Branch Students & Attendance Data
   useEffect(() => {
-    if (selBranchId && selBatchId && selSubjectId) {
+    if (selBranchId && selSubjectId) {
       const load = async () => {
-        const data = await db.getStudents(selBranchId, selBatchId);
+        // Fetch ALL students for the branch, we filter in UI based on selectedMarkingBatches
+        const data = await db.getStudents(selBranchId);
+        
         // Deduplicate
         const unique = Array.from(new Map(data.map(s => [s.uid, s])).values());
-        setStudents(unique.sort((a,b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '')));
-        setAllClassRecords(await db.getAttendance(selBranchId, selBatchId, selSubjectId));
+        setAllBranchStudents(unique.sort((a,b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '')));
         
-        // Reset status
-        const initialStatus: Record<string, boolean> = {};
-        unique.forEach(s => initialStatus[s.uid] = true); // Default Present
-        setAttendanceStatus(initialStatus);
+        // Load Attendance
+        // For 'ALL' batches context, we fetch everything for this subject/branch
+        setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
       };
       load();
     }
-  }, [selBranchId, selBatchId, selSubjectId]);
+  }, [selBranchId, selSubjectId]);
 
-  // Derived Selection Options
+  // 3. Initialize Batch Selection when Subject/Branch changes
+  useEffect(() => {
+    if (selBranchId && selSubjectId) {
+       // Find all relevant batches for this subject assignment
+       // Logic: If assigned 'ALL' -> Select all batches in branch.
+       // If assigned specific -> Select specific.
+       const rel = assignments.filter(a => a.branchId === selBranchId && a.subjectId === selSubjectId);
+       let batchesToSelect: string[] = [];
+       
+       if (rel.some(a => a.batchId === 'ALL')) {
+           batchesToSelect = metaData.rawBatches.filter(b => b.branchId === selBranchId).map(b => b.id);
+       } else {
+           batchesToSelect = Array.from(new Set(rel.map(a => a.batchId)));
+       }
+       setSelectedMarkingBatches(batchesToSelect);
+    }
+  }, [selBranchId, selSubjectId, assignments, metaData.rawBatches]);
+
+  // 4. Initialize Status for new filtered list
+  useEffect(() => {
+     const initialStatus: Record<string, boolean> = {};
+     // Only initialize for visible students
+     const visible = allBranchStudents.filter(s => s.studentData?.batchId && selectedMarkingBatches.includes(s.studentData.batchId));
+     visible.forEach(s => initialStatus[s.uid] = true);
+     setAttendanceStatus(prev => ({...initialStatus, ...prev})); // Merge to keep existing toggles
+  }, [selectedMarkingBatches, allBranchStudents]);
+
+
+  // --- Selection Logic ---
   const availableBranches = useMemo(() => {
     const ids = Array.from(new Set(assignments.map(a => a.branchId)));
     return ids.map(id => ({ id, name: metaData.branches[id] || id }));
   }, [assignments, metaData.branches]);
 
-  const availableBatches = useMemo(() => {
-    if (!selBranchId) return [];
-    // Filter assignments for this branch
-    const relAssignments = assignments.filter(a => a.branchId === selBranchId);
-    // Get unique batch IDs from assignments. 
-    // If 'ALL' is present, we must look up all batches for this branch from rawBatches.
-    const hasAll = relAssignments.some(a => a.batchId === 'ALL');
-    
-    if (hasAll) {
-       return metaData.rawBatches.filter(b => b.branchId === selBranchId);
-    }
-    
-    const batchIds = Array.from(new Set(relAssignments.map(a => a.batchId)));
-    return batchIds.map(id => ({ id, name: metaData.batches[id] || id }));
-  }, [selBranchId, assignments, metaData.batches, metaData.rawBatches]);
-
   const availableSubjects = useMemo(() => {
-    if (!selBranchId || !selBatchId) return [];
-    // Logic: Assignments matching Branch AND (Batch OR 'ALL')
-    const relevant = assignments.filter(a => 
-       a.branchId === selBranchId && 
-       (a.batchId === selBatchId || a.batchId === 'ALL')
-    );
-    const uniqueIds = Array.from(new Set(relevant.map(a => a.subjectId)));
+    if (!selBranchId) return [];
+    // Show all subjects assigned to this faculty in this branch
+    const rel = assignments.filter(a => a.branchId === selBranchId);
+    const uniqueIds = Array.from(new Set(rel.map(a => a.subjectId)));
     return uniqueIds.map(sid => ({ id: sid, ...metaData.subjects[sid] }));
-  }, [selBranchId, selBatchId, assignments, metaData.subjects]);
+  }, [selBranchId, assignments, metaData.subjects]);
 
-  // Handlers
+  // "Batches" Options for Multi-Select in Toolbar
+  const sameSubjectBatches = useMemo(() => {
+    if (!selBranchId || !selSubjectId) return [];
+    
+    const rel = assignments.filter(a => a.branchId === selBranchId && a.subjectId === selSubjectId);
+    // If we have an 'ALL' assignment, allow selecting from ALL batches in branch
+    if (rel.some(a => a.batchId === 'ALL')) return metaData.rawBatches.filter(b => b.branchId === selBranchId);
+
+    const bids = Array.from(new Set(rel.map(a => a.batchId)));
+    return bids.map(bid => ({ id: bid, name: metaData.batches[bid] || bid }));
+  }, [assignments, selBranchId, selSubjectId, metaData.batches, metaData.rawBatches]);
+
+  // Derived Students List (Visual)
+  const visibleStudents = useMemo(() => {
+     return allBranchStudents.filter(s => s.studentData?.batchId && selectedMarkingBatches.includes(s.studentData.batchId));
+  }, [allBranchStudents, selectedMarkingBatches]);
+
+
+  // --- Handlers ---
   const handleMark = (uid: string) => {
     setAttendanceStatus(prev => ({ ...prev, [uid]: !prev[uid] }));
   };
 
   const handleMarkAll = (status: boolean) => {
     const newStatus: Record<string, boolean> = {};
-    students.forEach(s => newStatus[s.uid] = status);
-    setAttendanceStatus(newStatus);
+    visibleStudents.forEach(s => newStatus[s.uid] = status);
+    setAttendanceStatus(prev => ({ ...prev, ...newStatus }));
   };
 
   const toggleSlot = (slot: number) => {
       setSelectedSlots(prev => prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot].sort());
   };
 
+  const toggleBatchSelection = (batchId: string) => {
+      setSelectedMarkingBatches(prev => {
+          if (prev.includes(batchId)) return prev.filter(id => id !== batchId);
+          return [...prev, batchId];
+      });
+  };
+
   const handleSave = async () => {
     if (selectedSlots.length === 0) { alert("Please select at least one lecture slot."); return; }
+    if (visibleStudents.length === 0) { alert("No students selected."); return; }
+    
     setIsSaving(true);
     setSaveMessage('');
     
@@ -157,16 +199,17 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     const timestamp = Date.now();
 
     selectedSlots.forEach(slot => {
-        students.forEach(s => {
+        visibleStudents.forEach(s => {
             records.push({
+                // ID construction ensures overwrite for same date/student/subject/slot
                 id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
                 date: attendanceDate,
                 studentId: s.uid,
                 subjectId: selSubjectId,
                 branchId: selBranchId,
-                batchId: selBatchId,
-                isPresent: attendanceStatus[s.uid],
-                markedBy: user.displayName, // Use Name
+                batchId: s.studentData!.batchId!, // Use student's actual batch
+                isPresent: attendanceStatus[s.uid] ?? true,
+                markedBy: user.displayName,
                 timestamp: timestamp,
                 lectureSlot: slot
             });
@@ -177,7 +220,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
         await db.saveAttendance(records);
         setSaveMessage('Attendance Saved Successfully!');
         // Refresh History
-        setAllClassRecords(await db.getAttendance(selBranchId, selBatchId, selSubjectId));
+        setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
         setTimeout(() => setSaveMessage(''), 3000);
     } catch (e: any) {
         alert("Error saving: " + e.message);
@@ -188,17 +231,24 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
 
   const handleExportCSV = () => {
      if (allClassRecords.length === 0) return;
-     const sorted = [...allClassRecords].sort((a,b) => b.timestamp - a.timestamp);
+     // Filter records based on view (if date selected)
+     let recordsToExport = allClassRecords;
+     if (historyFilterDate) {
+         recordsToExport = allClassRecords.filter(r => r.date === historyFilterDate);
+     }
+
+     const sorted = [...recordsToExport].sort((a,b) => b.timestamp - a.timestamp);
      
      const csvRows = [
-        ['Date', 'Lecture Slot', 'Student Name', 'Enrollment', 'Status', 'Marked By'],
+        ['Date', 'Lecture Slot', 'Student Name', 'Enrollment', 'Batch', 'Status', 'Marked By'],
         ...sorted.map(r => {
-           const stu = students.find(s => s.uid === r.studentId);
+           const stu = allBranchStudents.find(s => s.uid === r.studentId);
            return [
-             `="${r.date}"`, // Force Excel string format
+             `="${r.date}"`,
              r.lectureSlot || 1,
              `"${stu?.displayName || 'Unknown'}"`,
              `"${stu?.studentData?.enrollmentId || ''}"`,
+             `"${metaData.batches[r.batchId] || r.batchId}"`,
              r.isPresent ? 'Present' : 'Absent',
              `"${user.displayName}"`
            ];
@@ -209,7 +259,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
      const encodedUri = encodeURI(csvContent);
      const link = document.createElement("a");
      link.setAttribute("href", encodedUri);
-     link.setAttribute("download", `Attendance_${metaData.subjects[selSubjectId]?.name || 'Log'}_${attendanceDate}.csv`);
+     link.setAttribute("download", `Attendance_${metaData.subjects[selSubjectId]?.name || 'Log'}${historyFilterDate ? '_'+historyFilterDate : ''}.csv`);
      document.body.appendChild(link);
      link.click();
      document.body.removeChild(link);
@@ -236,7 +286,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                  </div>
               </div>
            </div>
-           
            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
               {studentRecords.map(r => (
                  <div key={r.id} className={`p-3 rounded-lg border text-center ${r.isPresent ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
@@ -254,43 +303,31 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
 
   if (loadingInit) return <div className="p-8 text-center">Loading Dashboard...</div>;
 
-  const showDashboard = selBranchId && selBatchId && selSubjectId;
+  const showDashboard = selBranchId && selSubjectId;
 
   return (
-    <div className="space-y-6 pb-20"> {/* pb-20 for sticky footer space */}
-      
+    <div className="space-y-6 pb-20"> 
       {/* 1. Command Center / Top Bar */}
       <Card className="bg-indigo-900 text-white border-none shadow-lg">
-         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
                <label className="block text-xs text-indigo-200 mb-1 uppercase font-semibold">Branch</label>
                <select 
                  value={selBranchId} 
-                 onChange={e => { setSelBranchId(e.target.value); setSelBatchId(''); setSelSubjectId(''); }}
+                 onChange={e => { setSelBranchId(e.target.value); setSelSubjectId(''); }}
                  className="w-full bg-indigo-800 border-indigo-700 text-white rounded p-2 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
                >
                  <option value="">Select Branch</option>
                  {availableBranches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                </select>
             </div>
-            <div>
-               <label className="block text-xs text-indigo-200 mb-1 uppercase font-semibold">Batch</label>
-               <select 
-                 value={selBatchId} 
-                 onChange={e => { setSelBatchId(e.target.value); setSelSubjectId(''); }}
-                 disabled={!selBranchId}
-                 className="w-full bg-indigo-800 border-indigo-700 text-white rounded p-2 focus:ring-2 focus:ring-indigo-400 focus:outline-none disabled:opacity-50"
-               >
-                 <option value="">Select Batch</option>
-                 {availableBatches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-               </select>
-            </div>
+            {/* Removed Batch Context Dropdown from Top Bar */}
             <div>
                <label className="block text-xs text-indigo-200 mb-1 uppercase font-semibold">Subject</label>
                <select 
                  value={selSubjectId} 
                  onChange={e => setSelSubjectId(e.target.value)}
-                 disabled={!selBatchId}
+                 disabled={!selBranchId}
                  className="w-full bg-indigo-800 border-indigo-700 text-white rounded p-2 focus:ring-2 focus:ring-indigo-400 focus:outline-none disabled:opacity-50"
                >
                  <option value="">Select Subject</option>
@@ -303,8 +340,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       {!showDashboard ? (
          <div className="text-center py-20 bg-white rounded-lg border border-dashed border-slate-300">
             <Filter className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-            <h3 className="text-lg font-medium text-slate-600">Select a Class Context</h3>
-            <p className="text-slate-400">Choose Branch, Batch, and Subject to manage attendance.</p>
+            <h3 className="text-lg font-medium text-slate-600">Select Branch & Subject</h3>
+            <p className="text-slate-400">Choose Branch and Subject to start marking attendance.</p>
          </div>
       ) : (
          <>
@@ -327,19 +364,56 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
             {activeTab === 'MARK' && (
                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-4 bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                     <div className="flex flex-col md:flex-row gap-4">
-                        <div className="w-full md:w-auto">
-                           <label className="block text-xs font-semibold text-slate-500 mb-1">Date</label>
-                           <input 
-                              type="date" 
-                              value={attendanceDate}
-                              onChange={e => setAttendanceDate(e.target.value)}
-                              className="px-3 py-2 bg-white border border-slate-300 rounded text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
-                           />
+                     <div className="flex flex-col gap-4 flex-grow">
+                        <div className="flex gap-4">
+                           <div className="w-48">
+                              <label className="block text-xs font-semibold text-slate-500 mb-1">Date</label>
+                              <input 
+                                 type="date" 
+                                 value={attendanceDate}
+                                 onChange={e => setAttendanceDate(e.target.value)}
+                                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                              />
+                           </div>
+                           
+                           {/* Multi Batch Selector */}
+                           <div className="w-64 relative">
+                              <label className="block text-xs font-semibold text-slate-500 mb-1">Batches</label>
+                              <button 
+                                 onClick={() => setIsBatchDropdownOpen(!isBatchDropdownOpen)}
+                                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded text-slate-900 flex justify-between items-center focus:ring-2 focus:ring-indigo-500"
+                              >
+                                 <span className="truncate">{selectedMarkingBatches.length > 0 ? `${selectedMarkingBatches.length} Selected` : 'Select Batches'}</span>
+                                 <ChevronDown className="h-4 w-4 text-slate-400" />
+                              </button>
+                              
+                              {isBatchDropdownOpen && (
+                                 <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 shadow-lg rounded-md z-10 max-h-60 overflow-y-auto">
+                                    {sameSubjectBatches.map(b => {
+                                        const isSelected = selectedMarkingBatches.includes(b.id);
+                                        return (
+                                           <div 
+                                              key={b.id} 
+                                              onClick={() => toggleBatchSelection(b.id)}
+                                              className="px-3 py-2 hover:bg-indigo-50 cursor-pointer flex items-center text-sm"
+                                           >
+                                              {isSelected ? <CheckSquare className="h-4 w-4 text-indigo-600 mr-2" /> : <Square className="h-4 w-4 text-slate-300 mr-2" />}
+                                              <span className={isSelected ? 'text-indigo-900 font-medium' : 'text-slate-600'}>{b.name}</span>
+                                           </div>
+                                        );
+                                    })}
+                                    {sameSubjectBatches.length === 0 && <div className="p-2 text-xs text-slate-400 text-center">No batches found</div>}
+                                 </div>
+                              )}
+                              {isBatchDropdownOpen && (
+                                 <div className="fixed inset-0 z-0" onClick={() => setIsBatchDropdownOpen(false)}></div>
+                              )}
+                           </div>
                         </div>
+
                         <div>
                            <label className="block text-xs font-semibold text-slate-500 mb-1">Lecture Slots</label>
-                           <div className="flex gap-1">
+                           <div className="flex gap-1 flex-wrap">
                               {[1, 2, 3, 4, 5, 6, 7].map(slot => (
                                  <button
                                     key={slot}
@@ -363,15 +437,16 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                      <table className="w-full text-left border-collapse">
                         <thead className="bg-slate-50 border-b border-slate-200">
                            <tr>
-                              <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-16">Roll</th>
-                              <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Student Details</th>
-                              <th className="py-3 px-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-center w-32">Status</th>
+                              <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider w-20">Roll</th>
+                              <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider">Student Details</th>
+                              {/* Removed Batch Column as requested */}
+                              <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider text-center w-32">Status</th>
                            </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                           {students.map((s) => (
+                           {visibleStudents.map((s) => (
                               <tr key={s.uid} className={`hover:bg-slate-50 transition-colors ${!attendanceStatus[s.uid] ? 'bg-red-50/30' : ''}`}>
-                                 <td className="py-3 px-4 text-slate-500 font-mono text-sm">{s.studentData?.rollNo || '-'}</td>
+                                 <td className="py-3 px-4 text-slate-900 font-mono text-sm">{s.studentData?.rollNo || '-'}</td>
                                  <td className="py-3 px-4">
                                     <div className="font-semibold text-slate-900">{s.displayName}</div>
                                     <div className="text-xs text-slate-500 font-mono">{s.studentData?.enrollmentId}</div>
@@ -379,24 +454,24 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                                  <td className="py-3 px-4 text-center">
                                     <div className="flex justify-center">
                                        <ToggleSwitch 
-                                          checked={attendanceStatus[s.uid]} 
+                                          checked={attendanceStatus[s.uid] ?? true} 
                                           onChange={() => handleMark(s.uid)} 
                                        />
                                     </div>
                                  </td>
                               </tr>
                            ))}
-                           {students.length === 0 && (
-                              <tr><td colSpan={3} className="p-8 text-center text-slate-400">No students found in this batch.</td></tr>
+                           {visibleStudents.length === 0 && (
+                              <tr><td colSpan={3} className="p-8 text-center text-slate-400">No students found in selected batches.</td></tr>
                            )}
                         </tbody>
                      </table>
                   </div>
 
-                  {/* Sticky Footer Action Bar */}
+                  {/* Sticky Footer */}
                   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-t border-indigo-100 p-4 shadow-[0_-4px_20px_-5px_rgba(0,0,0,0.1)] z-40 flex justify-between items-center md:pl-8 md:pr-8">
                      <div className="text-sm font-medium text-slate-600 hidden sm:block">
-                        Marking: <span className="text-indigo-600 font-bold">{students.filter(s => attendanceStatus[s.uid]).length}</span> Present / <span className="text-slate-900">{students.length}</span> Total
+                        Marking: <span className="text-indigo-600 font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</span> Present / <span className="text-slate-900">{visibleStudents.length}</span> Total
                      </div>
                      <div className="flex items-center gap-4 ml-auto">
                         {saveMessage && <span className="text-green-600 text-sm font-medium animate-pulse">{saveMessage}</span>}
@@ -410,11 +485,23 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
 
             {activeTab === 'HISTORY' && (
                <Card>
-                  <div className="flex justify-between items-center mb-6">
+                  <div className="flex flex-col sm:flex-row justify-between items-end sm:items-center mb-6 gap-4">
                      <h3 className="font-bold text-lg text-slate-800">Class Attendance Log</h3>
-                     <Button variant="secondary" onClick={handleExportCSV} disabled={allClassRecords.length === 0}>
-                        <FileDown className="h-4 w-4 mr-2" /> Export CSV
-                     </Button>
+                     <div className="flex gap-3 items-center">
+                         <div className="flex items-center gap-2">
+                             <label className="text-xs font-semibold text-slate-500">Filter Date:</label>
+                             <input 
+                                type="date" 
+                                value={historyFilterDate}
+                                onChange={e => setHistoryFilterDate(e.target.value)}
+                                className="px-2 py-1.5 text-sm bg-white border border-slate-300 rounded text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                             />
+                             {historyFilterDate && <button onClick={() => setHistoryFilterDate('')} className="text-slate-400 hover:text-slate-600"><XCircle className="h-4 w-4"/></button>}
+                         </div>
+                         <Button variant="secondary" onClick={handleExportCSV} disabled={allClassRecords.length === 0}>
+                            <FileDown className="h-4 w-4 mr-2" /> Export CSV
+                         </Button>
+                     </div>
                   </div>
                   
                   <div className="overflow-x-auto">
@@ -423,33 +510,72 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                            <tr>
                               <th className="p-3 text-slate-900 font-bold">Roll</th>
                               <th className="p-3 text-slate-900 font-bold">Name</th>
-                              <th className="p-3 text-slate-900 font-bold text-center">Total Sessions</th>
-                              <th className="p-3 text-slate-900 font-bold text-center">Present</th>
-                              <th className="p-3 text-slate-900 font-bold text-center">%</th>
-                              <th className="p-3 text-slate-900 font-bold text-right">Action</th>
+                              {historyFilterDate ? (
+                                  <>
+                                    <th className="p-3 text-slate-900 font-bold text-center">Batch</th>
+                                    <th className="p-3 text-slate-900 font-bold text-center">Date Status ({historyFilterDate})</th>
+                                  </>
+                              ) : (
+                                  <>
+                                    <th className="p-3 text-slate-900 font-bold text-center">Total Sessions</th>
+                                    <th className="p-3 text-slate-900 font-bold text-center">Present</th>
+                                    <th className="p-3 text-slate-900 font-bold text-center">%</th>
+                                    <th className="p-3 text-slate-900 font-bold text-right">Action</th>
+                                  </>
+                              )}
                            </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                           {students.map(s => {
+                           {visibleStudents.map(s => {
+                              // Filter records for student
                               const myRecs = allClassRecords.filter(r => r.studentId === s.uid);
-                              const total = myRecs.length;
-                              const present = myRecs.filter(r => r.isPresent).length;
-                              const pct = total === 0 ? 0 : Math.round((present/total)*100);
                               
-                              return (
-                                 <tr key={s.uid} onClick={() => setViewHistoryStudent(s)} className="hover:bg-indigo-50 cursor-pointer transition-colors group">
-                                    <td className="p-3 font-mono text-slate-600">{s.studentData?.rollNo}</td>
-                                    <td className="p-3 font-medium text-slate-900">{s.displayName}</td>
-                                    <td className="p-3 text-center text-slate-600">{total}</td>
-                                    <td className="p-3 text-center text-green-700 font-medium">{present}</td>
-                                    <td className="p-3 text-center">
-                                       <span className={`px-2 py-0.5 rounded text-xs font-bold ${pct < 75 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{pct}%</span>
-                                    </td>
-                                    <td className="p-3 text-right text-slate-400 group-hover:text-indigo-600">
-                                       <ChevronDown className="h-4 w-4 inline transform -rotate-90" />
-                                    </td>
-                                 </tr>
-                              );
+                              if (historyFilterDate) {
+                                  // DATE VIEW
+                                  const dateRecs = myRecs.filter(r => r.date === historyFilterDate);
+                                  const slotsTaken = dateRecs.map(r => r.lectureSlot).sort();
+                                  
+                                  return (
+                                     <tr key={s.uid} className="hover:bg-indigo-50 transition-colors">
+                                        <td className="p-3 font-mono text-slate-600">{s.studentData?.rollNo}</td>
+                                        <td className="p-3 font-medium text-slate-900">{s.displayName}</td>
+                                        <td className="p-3 text-center text-slate-500">{metaData.batches[s.studentData?.batchId || ''] || s.studentData?.batchId}</td>
+                                        <td className="p-3 text-center">
+                                            {dateRecs.length > 0 ? (
+                                                <div className="flex gap-2 justify-center flex-wrap">
+                                                    {dateRecs.map(r => (
+                                                        <span key={r.id} className={`inline-flex items-center px-2 py-1 rounded text-xs font-bold border ${r.isPresent ? 'bg-green-100 text-green-700 border-green-200' : 'bg-red-100 text-red-700 border-red-200'}`}>
+                                                            L{r.lectureSlot || 1}: {r.isPresent ? 'P' : 'A'}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <span className="text-slate-400 italic">No Data</span>
+                                            )}
+                                        </td>
+                                     </tr>
+                                  )
+                              } else {
+                                  // AGGREGATE VIEW
+                                  const total = myRecs.length;
+                                  const present = myRecs.filter(r => r.isPresent).length;
+                                  const pct = total === 0 ? 0 : Math.round((present/total)*100);
+                                  
+                                  return (
+                                     <tr key={s.uid} onClick={() => setViewHistoryStudent(s)} className="hover:bg-indigo-50 cursor-pointer transition-colors group">
+                                        <td className="p-3 font-mono text-slate-600">{s.studentData?.rollNo}</td>
+                                        <td className="p-3 font-medium text-slate-900">{s.displayName}</td>
+                                        <td className="p-3 text-center text-slate-600">{total}</td>
+                                        <td className="p-3 text-center text-green-700 font-medium">{present}</td>
+                                        <td className="p-3 text-center">
+                                           <span className={`px-2 py-0.5 rounded text-xs font-bold ${pct < 75 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{pct}%</span>
+                                        </td>
+                                        <td className="p-3 text-right text-slate-400 group-hover:text-indigo-600">
+                                           <ChevronDown className="h-4 w-4 inline transform -rotate-90" />
+                                        </td>
+                                     </tr>
+                                  );
+                              }
                            })}
                         </tbody>
                      </table>
