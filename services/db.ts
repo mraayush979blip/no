@@ -58,6 +58,7 @@ interface IDataService {
   getAttendance: (branchId: string, batchId: string, subjectId: string, date?: string) => Promise<AttendanceRecord[]>;
   getStudentAttendance: (studentId: string) => Promise<AttendanceRecord[]>;
   saveAttendance: (records: AttendanceRecord[]) => Promise<void>;
+  deleteAttendance: (ids: string[]) => Promise<void>;
   
   // Setup
   seedDatabase: () => Promise<void>;
@@ -69,7 +70,8 @@ class FirebaseService implements IDataService {
   private async createAuthUser(email: string, pass: string = "password123"): Promise<string> {
     let secondApp: FirebaseApp | null = null;
     try {
-      secondApp = initializeApp(firebaseConfig, "SecondaryApp");
+      // Use unique name to prevent collisions
+      secondApp = initializeApp(firebaseConfig, `AuthWorker_${Date.now()}_${Math.random()}`);
       const secondAuth = getAuth(secondApp);
       const cred = await createUserWithEmailAndPassword(secondAuth, email, pass);
       await signOut(secondAuth);
@@ -229,7 +231,8 @@ class FirebaseService implements IDataService {
         if (password && email) {
             let tempApp: FirebaseApp | null = null;
             try {
-                tempApp = initializeApp(firebaseConfig, "TempDeleteApp");
+                // Use unique name to prevent collisions
+                tempApp = initializeApp(firebaseConfig, `DeleteWorker_${Date.now()}_${Math.random()}`);
                 const tempAuth = getAuth(tempApp);
                 const cred = await signInWithEmailAndPassword(tempAuth, email, password);
                 await deleteAuthUser(cred.user); // Delete from Authentication
@@ -276,7 +279,8 @@ class FirebaseService implements IDataService {
     if (oldPass) {
         let tempApp: FirebaseApp | null = null;
         try {
-            tempApp = initializeApp(firebaseConfig, "TempResetApp");
+            // Use unique name to prevent collisions
+            tempApp = initializeApp(firebaseConfig, `ResetWorker_${Date.now()}_${Math.random()}`);
             const tempAuth = getAuth(tempApp);
             const cred = await signInWithEmailAndPassword(tempAuth, userData.email, oldPass);
             await deleteAuthUser(cred.user); // Delete Auth User
@@ -373,6 +377,11 @@ class FirebaseService implements IDataService {
   async saveAttendance(records: AttendanceRecord[]): Promise<void> {
     const batch = writeBatch(firestore);
     records.forEach(rec => batch.set(doc(firestore, "attendance", rec.id), rec));
+    await batch.commit();
+  }
+  async deleteAttendance(ids: string[]): Promise<void> {
+    const batch = writeBatch(firestore);
+    ids.forEach(id => batch.delete(doc(firestore, "attendance", id)));
     await batch.commit();
   }
 
@@ -566,6 +575,11 @@ class MockService implements IDataService {
       records.forEach(r => recordMap.set(r.id, r));
       this.save('ams_attendance', Array.from(recordMap.values()));
     }
+  }
+  async deleteAttendance(ids: string[]) {
+    const all = this.load('ams_attendance', []) as AttendanceRecord[];
+    const idSet = new Set(ids);
+    this.save('ams_attendance', all.filter(r => !idSet.has(r.id)));
   }
   async seedDatabase() { 
       localStorage.setItem('ams_branches', JSON.stringify(SEED_BRANCHES));

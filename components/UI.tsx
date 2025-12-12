@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { X, Upload } from 'lucide-react';
 
@@ -94,23 +95,42 @@ export const FileUploader: React.FC<{ onFileSelect: (file: File) => void; accept
 
 export const AcropolisLogo: React.FC<{ className?: string }> = ({ className }) => (
   <svg viewBox="0 0 200 150" className={className} xmlns="http://www.w3.org/2000/svg" fill="none">
-    {/* Blue Orbit */}
-    <ellipse cx="100" cy="75" rx="85" ry="40" transform="rotate(-15 100 75)" stroke="#1e3a8a" strokeWidth="6" />
+    {/* Blue Orbit (Tilted Ellipse) */}
+    <path 
+      d="M190 75 C190 115 110 135 70 115 C30 95 30 55 100 35" 
+      stroke="#1e3a8a" 
+      strokeWidth="5" 
+      strokeLinecap="round"
+      fill="none"
+    />
     
-    {/* Red Orbit */}
-    <path d="M180 60C170 20 30 20 20 60" stroke="#dc2626" strokeWidth="6" strokeLinecap="round" transform="rotate(15 100 75)" />
-    <path d="M20 90C30 130 170 130 180 90" stroke="#dc2626" strokeWidth="6" strokeLinecap="round" transform="rotate(15 100 75)" />
+    {/* Red Orbit (Crossing Ellipse) */}
+    <path 
+      d="M10 75 C10 35 90 15 130 35 C170 55 170 95 100 115" 
+      stroke="#dc2626" 
+      strokeWidth="5" 
+      strokeLinecap="round"
+      fill="none"
+    />
 
-    {/* Pillar/Building (Education) */}
-    <rect x="75" y="45" width="50" height="12" fill="#1e3a8a" /> {/* Top Capital */}
-    <rect x="82" y="57" width="8" height="50" fill="#1e3a8a" /> {/* Col 1 */}
-    <rect x="96" y="57" width="8" height="50" fill="#1e3a8a" /> {/* Col 2 */}
-    <rect x="110" y="57" width="8" height="50" fill="#1e3a8a" /> {/* Col 3 */}
-    <rect x="70" y="107" width="60" height="8" fill="#1e3a8a" /> {/* Base */}
-    
-    {/* Gear (Engineering/Tech) - Positioned near top right of pillar */}
-    <circle cx="125" cy="45" r="14" stroke="#dc2626" strokeWidth="4" />
-    <path d="M125 28V34 M125 56V62 M111 45H117 M133 45H139" stroke="#dc2626" strokeWidth="4" strokeLinecap="round" />
-    <circle cx="125" cy="45" r="5" fill="#dc2626" />
+    {/* Ionic Pillar Capital (The Scroll) - Dark Blue */}
+    <path 
+      d="M75 55 C65 55 60 65 65 70 C70 75 80 75 80 75 L120 75 C120 75 130 75 135 70 C140 65 135 55 125 55 Z" 
+      fill="#1e3a8a"
+    />
+    {/* Pillar Shaft - Vertical Lines */}
+    <rect x="82" y="78" width="6" height="40" fill="#1e3a8a" />
+    <rect x="92" y="78" width="6" height="40" fill="#1e3a8a" />
+    <rect x="102" y="78" width="6" height="40" fill="#1e3a8a" />
+    <rect x="112" y="78" width="6" height="40" fill="#1e3a8a" />
+    {/* Pillar Base */}
+    <rect x="75" y="118" width="50" height="8" fill="#1e3a8a" />
+
+    {/* Engineering Gear (Red) - Tucked top right */}
+    <g transform="translate(130, 60)">
+       <circle cx="0" cy="0" r="10" stroke="#dc2626" strokeWidth="3" fill="none" />
+       <path d="M0 -14 V-10 M10 -10 L7 -7 M14 0 H10 M10 10 L7 7 M0 14 V10 M-10 10 L-7 7 M-14 0 H-10 M-10 -10 L-7 -7" stroke="#dc2626" strokeWidth="4" strokeLinecap="round" />
+       <circle cx="0" cy="0" r="4" fill="#dc2626" />
+    </g>
   </svg>
 );

@@ -2,8 +2,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../services/db';
 import { User, FacultyAssignment, AttendanceRecord, Batch } from '../types';
-import { Button, Card } from '../components/UI';
-import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle } from 'lucide-react';
+import { Button, Card, Modal } from '../components/UI';
+import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle, AlertCircle, Trash2 } from 'lucide-react';
 
 interface FacultyProps { user: User; }
 
@@ -50,6 +50,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [saveMessage, setSaveMessage] = useState('');
   const [allClassRecords, setAllClassRecords] = useState<AttendanceRecord[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [actionType, setActionType] = useState<'SAVE' | 'DELETE'>('SAVE');
 
   // Multi-Batch Selection State
   const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
@@ -125,14 +128,47 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     }
   }, [selBranchId, selSubjectId, assignments, metaData.rawBatches]);
 
-  // 4. Initialize Status for new filtered list
+  // 4. Initialize Status / Detect Edit Mode
   useEffect(() => {
-     const initialStatus: Record<string, boolean> = {};
-     // Only initialize for visible students
+     // Identify students currently visible
      const visible = allBranchStudents.filter(s => s.studentData?.batchId && selectedMarkingBatches.includes(s.studentData.batchId));
-     visible.forEach(s => initialStatus[s.uid] = true);
-     setAttendanceStatus(prev => ({...initialStatus, ...prev})); // Merge to keep existing toggles
-  }, [selectedMarkingBatches, allBranchStudents]);
+     
+     // Check if we have existing records for the selected Date + Slots
+     // Note: If multiple slots are selected, we look for *any* match to trigger edit mode.
+     // If conflicts exist (e.g. Present in Slot 1, Absent in Slot 2), we prioritize the record found first.
+     const existingRecords = allClassRecords.filter(r => 
+        r.date === attendanceDate && 
+        r.branchId === selBranchId &&
+        r.subjectId === selSubjectId &&
+        selectedSlots.includes(r.lectureSlot || 1)
+     );
+
+     const newStatus: Record<string, boolean> = {};
+     let foundExisting = false;
+
+     if (existingRecords.length > 0) {
+        foundExisting = true;
+        visible.forEach(s => {
+           const rec = existingRecords.find(r => r.studentId === s.uid);
+           if (rec) {
+              newStatus[s.uid] = rec.isPresent;
+           } else {
+              // No record for this specific student in this slot? Default to Present (or keep previous state if complex merging needed, but simple is better)
+              newStatus[s.uid] = true;
+           }
+        });
+     } else {
+        foundExisting = false;
+        // Default to Present
+        visible.forEach(s => newStatus[s.uid] = true);
+     }
+     
+     setIsEditMode(foundExisting);
+     // Only update status if we found records (Edit Mode) OR if the list of students changed significantly (to init them)
+     // To allow manual toggling without reset when just switching views, we'd need more complex state. 
+     // For now, changing Date/Slot/Batch loads the "Source of Truth" (DB or Default).
+     setAttendanceStatus(newStatus);
+  }, [selectedMarkingBatches, attendanceDate, selectedSlots, allClassRecords, selBranchId, selSubjectId, allBranchStudents]);
 
 
   // --- Selection Logic ---
@@ -189,42 +225,83 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       });
   };
 
-  const handleSave = async () => {
+  const handleSaveClick = () => {
     if (selectedSlots.length === 0) { alert("Please select at least one lecture slot."); return; }
     if (visibleStudents.length === 0) { alert("No students selected."); return; }
+    setActionType('SAVE');
+    setShowConfirmModal(true);
+  };
+
+  const handleDeleteClick = () => {
+    // Determine which records would be affected by the current view
+    const visibleStudentIds = new Set(visibleStudents.map(s => s.uid));
+    const toDelete = allClassRecords.filter(r => 
+       r.date === attendanceDate &&
+       r.subjectId === selSubjectId &&
+       selectedSlots.includes(r.lectureSlot || 1) &&
+       visibleStudentIds.has(r.studentId)
+    );
     
+    if (toDelete.length === 0) {
+        alert("No records found to delete for the selected criteria.");
+        return;
+    }
+    
+    setActionType('DELETE');
+    setShowConfirmModal(true);
+  };
+
+  const handleConfirmAction = async () => {
     setIsSaving(true);
     setSaveMessage('');
+    setShowConfirmModal(false);
     
-    const records: AttendanceRecord[] = [];
-    const timestamp = Date.now();
-
-    selectedSlots.forEach(slot => {
-        visibleStudents.forEach(s => {
-            records.push({
-                // ID construction ensures overwrite for same date/student/subject/slot
-                id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
-                date: attendanceDate,
-                studentId: s.uid,
-                subjectId: selSubjectId,
-                branchId: selBranchId,
-                batchId: s.studentData!.batchId!, // Use student's actual batch
-                isPresent: attendanceStatus[s.uid] ?? true,
-                markedBy: user.displayName,
-                timestamp: timestamp,
-                lectureSlot: slot
-            });
-        });
-    });
-
     try {
-        await db.saveAttendance(records);
-        setSaveMessage('Attendance Saved Successfully!');
-        // Refresh History
+        if (actionType === 'DELETE') {
+             // Logic: Filter matching records and delete only them
+             const visibleStudentIds = new Set(visibleStudents.map(s => s.uid));
+             const toDeleteIds = allClassRecords
+                 .filter(r => 
+                    r.date === attendanceDate &&
+                    r.subjectId === selSubjectId &&
+                    selectedSlots.includes(r.lectureSlot || 1) &&
+                    visibleStudentIds.has(r.studentId)
+                 )
+                 .map(r => r.id);
+             
+             await db.deleteAttendance(toDeleteIds);
+             setSaveMessage('Attendance Records Cleared.');
+        } else {
+             const records: AttendanceRecord[] = [];
+             const timestamp = Date.now();
+        
+             selectedSlots.forEach(slot => {
+                 visibleStudents.forEach(s => {
+                     records.push({
+                         // ID construction ensures overwrite for same date/student/subject/slot
+                         id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
+                         date: attendanceDate,
+                         studentId: s.uid,
+                         subjectId: selSubjectId,
+                         branchId: selBranchId,
+                         batchId: s.studentData!.batchId!, // Use student's actual batch
+                         isPresent: attendanceStatus[s.uid] ?? true,
+                         markedBy: user.displayName,
+                         timestamp: timestamp,
+                         lectureSlot: slot
+                     });
+                 });
+             });
+        
+             await db.saveAttendance(records);
+             setSaveMessage(isEditMode ? 'Attendance Updated Successfully!' : 'Attendance Saved Successfully!');
+        }
+        
+        // Refresh Data
         setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
         setTimeout(() => setSaveMessage(''), 3000);
     } catch (e: any) {
-        alert("Error saving: " + e.message);
+        alert("Error: " + e.message);
     } finally {
         setIsSaving(false);
     }
@@ -322,7 +399,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                  {availableBranches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                </select>
             </div>
-            {/* Removed Batch Context Dropdown from Top Bar */}
             <div>
                <label className="block text-xs text-indigo-200 mb-1 uppercase font-semibold">Subject</label>
                <select 
@@ -364,8 +440,15 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
 
             {activeTab === 'MARK' && (
                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-4 bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                  <div className={`flex flex-col md:flex-row md:items-end justify-between gap-4 mb-4 bg-white p-4 rounded-lg border shadow-sm ${isEditMode ? 'border-orange-300 bg-orange-50' : 'border-slate-200'}`}>
+                     
                      <div className="flex flex-col gap-4 flex-grow">
+                        {isEditMode && (
+                           <div className="flex items-center text-orange-700 font-bold text-sm mb-1">
+                              <AlertCircle className="h-4 w-4 mr-2" />
+                              Editing Existing Attendance
+                           </div>
+                        )}
                         <div className="flex gap-4">
                            <div className="w-48">
                               <label className="block text-xs font-semibold text-slate-500 mb-1">Date</label>
@@ -440,7 +523,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                            <tr>
                               <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider w-20">Roll</th>
                               <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider">Student Details</th>
-                              {/* Removed Batch Column as requested */}
                               <th className="py-3 px-4 text-xs font-bold text-slate-900 uppercase tracking-wider text-center w-32">Status</th>
                            </tr>
                         </thead>
@@ -476,8 +558,15 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                      </div>
                      <div className="flex items-center gap-4 ml-auto">
                         {saveMessage && <span className="text-green-600 text-sm font-medium animate-pulse">{saveMessage}</span>}
-                        <Button onClick={handleSave} disabled={isSaving} className="shadow-lg shadow-indigo-200">
-                           {isSaving ? 'Saving...' : `Save Attendance (${selectedSlots.length} Slots)`}
+                        
+                        {isEditMode && (
+                            <Button variant="danger" onClick={handleDeleteClick} disabled={isSaving} className="mr-2">
+                                <Trash2 className="h-4 w-4 mr-2 inline" /> Clear Record
+                            </Button>
+                        )}
+                        
+                        <Button onClick={handleSaveClick} disabled={isSaving} className="shadow-lg shadow-indigo-200">
+                           {isSaving ? 'Processing...' : isEditMode ? 'Update Attendance' : `Save Attendance`}
                         </Button>
                      </div>
                   </div>
@@ -534,7 +623,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                               if (historyFilterDate) {
                                   // DATE VIEW
                                   const dateRecs = myRecs.filter(r => r.date === historyFilterDate);
-                                  const slotsTaken = dateRecs.map(r => r.lectureSlot).sort();
                                   
                                   return (
                                      <tr key={s.uid} className="hover:bg-indigo-50 transition-colors">
@@ -585,6 +673,56 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
             )}
          </>
       )}
+
+      {/* Confirmation Modal */}
+      <Modal 
+         isOpen={showConfirmModal} 
+         onClose={() => setShowConfirmModal(false)} 
+         title={actionType === 'DELETE' ? "Confirm Deletion" : (isEditMode ? "Confirm Update" : "Confirm Submission")}
+      >
+         <div className="space-y-4">
+            {actionType === 'DELETE' ? (
+                <div className="p-4 bg-red-50 rounded-lg border border-red-200 text-red-800 text-sm">
+                    <div className="flex items-center gap-2 font-bold text-lg mb-2">
+                        <AlertCircle className="h-5 w-5" /> Warning
+                    </div>
+                    <p>You are about to permanently delete attendance records for <strong>{attendanceDate}</strong>.</p>
+                    <p className="mt-2 text-red-700">This action cannot be undone. Are you sure you want to clear the history for this slot?</p>
+                </div>
+            ) : (
+                <>
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
+                   <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
+                   <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
+                   <div className="flex justify-between"><span className="text-slate-500">Slots:</span> <span className="font-semibold text-slate-900">L{selectedSlots.join(', L')}</span></div>
+                   <div className="flex justify-between items-start"><span className="text-slate-500">Batches:</span> <div className="text-right font-semibold text-slate-900">{selectedMarkingBatches.map(b => metaData.batches[b]).join(', ')}</div></div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 text-center">
+                   <div className="p-3 bg-green-50 text-green-800 rounded-lg border border-green-100">
+                      <div className="text-2xl font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</div>
+                      <div className="text-xs uppercase font-semibold opacity-70">Present</div>
+                   </div>
+                   <div className="p-3 bg-red-50 text-red-800 rounded-lg border border-red-100">
+                      <div className="text-2xl font-bold">{visibleStudents.filter(s => !attendanceStatus[s.uid]).length}</div>
+                      <div className="text-xs uppercase font-semibold opacity-70">Absent</div>
+                   </div>
+                </div>
+                </>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+               <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
+               <Button 
+                 onClick={handleConfirmAction} 
+                 disabled={isSaving} 
+                 variant={actionType === 'DELETE' ? 'danger' : 'primary'}
+               >
+                  {isSaving ? 'Processing...' : (actionType === 'DELETE' ? 'Yes, Delete Records' : 'Confirm & Save')}
+               </Button>
+            </div>
+         </div>
+      </Modal>
     </div>
   );
 };
