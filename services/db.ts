@@ -58,7 +58,6 @@ interface IDataService {
   getAttendance: (branchId: string, batchId: string, subjectId: string, date?: string) => Promise<AttendanceRecord[]>;
   getStudentAttendance: (studentId: string) => Promise<AttendanceRecord[]>;
   saveAttendance: (records: AttendanceRecord[]) => Promise<void>;
-  deleteAttendance: (ids: string[]) => Promise<void>;
   
   // Setup
   seedDatabase: () => Promise<void>;
@@ -379,11 +378,6 @@ class FirebaseService implements IDataService {
     records.forEach(rec => batch.set(doc(firestore, "attendance", rec.id), rec));
     await batch.commit();
   }
-  async deleteAttendance(ids: string[]): Promise<void> {
-    const batch = writeBatch(firestore);
-    ids.forEach(id => batch.delete(doc(firestore, "attendance", id)));
-    await batch.commit();
-  }
 
   async seedDatabase(): Promise<void> {
     const batch = writeBatch(firestore);
@@ -575,11 +569,6 @@ class MockService implements IDataService {
       records.forEach(r => recordMap.set(r.id, r));
       this.save('ams_attendance', Array.from(recordMap.values()));
     }
-  }
-  async deleteAttendance(ids: string[]) {
-    const all = this.load('ams_attendance', []) as AttendanceRecord[];
-    const idSet = new Set(ids);
-    this.save('ams_attendance', all.filter(r => !idSet.has(r.id)));
   }
   async seedDatabase() { 
       localStorage.setItem('ams_branches', JSON.stringify(SEED_BRANCHES));

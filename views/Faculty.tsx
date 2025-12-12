@@ -3,7 +3,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../services/db';
 import { User, FacultyAssignment, AttendanceRecord, Batch } from '../types';
 import { Button, Card, Modal } from '../components/UI';
-import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle, AlertCircle, Trash2 } from 'lucide-react';
+import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle, AlertCircle } from 'lucide-react';
 
 interface FacultyProps { user: User; }
 
@@ -52,7 +52,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [actionType, setActionType] = useState<'SAVE' | 'DELETE'>('SAVE');
 
   // Multi-Batch Selection State
   const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
@@ -228,80 +227,43 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const handleSaveClick = () => {
     if (selectedSlots.length === 0) { alert("Please select at least one lecture slot."); return; }
     if (visibleStudents.length === 0) { alert("No students selected."); return; }
-    setActionType('SAVE');
     setShowConfirmModal(true);
   };
 
-  const handleDeleteClick = () => {
-    // Determine which records would be affected by the current view
-    const visibleStudentIds = new Set(visibleStudents.map(s => s.uid));
-    const toDelete = allClassRecords.filter(r => 
-       r.date === attendanceDate &&
-       r.subjectId === selSubjectId &&
-       selectedSlots.includes(r.lectureSlot || 1) &&
-       visibleStudentIds.has(r.studentId)
-    );
-    
-    if (toDelete.length === 0) {
-        alert("No records found to delete for the selected criteria.");
-        return;
-    }
-    
-    setActionType('DELETE');
-    setShowConfirmModal(true);
-  };
-
-  const handleConfirmAction = async () => {
+  const executeSave = async () => {
     setIsSaving(true);
     setSaveMessage('');
     setShowConfirmModal(false);
     
+    const records: AttendanceRecord[] = [];
+    const timestamp = Date.now();
+
+    selectedSlots.forEach(slot => {
+        visibleStudents.forEach(s => {
+            records.push({
+                // ID construction ensures overwrite for same date/student/subject/slot
+                id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
+                date: attendanceDate,
+                studentId: s.uid,
+                subjectId: selSubjectId,
+                branchId: selBranchId,
+                batchId: s.studentData!.batchId!, // Use student's actual batch
+                isPresent: attendanceStatus[s.uid] ?? true,
+                markedBy: user.displayName,
+                timestamp: timestamp,
+                lectureSlot: slot
+            });
+        });
+    });
+
     try {
-        if (actionType === 'DELETE') {
-             // Logic: Filter matching records and delete only them
-             const visibleStudentIds = new Set(visibleStudents.map(s => s.uid));
-             const toDeleteIds = allClassRecords
-                 .filter(r => 
-                    r.date === attendanceDate &&
-                    r.subjectId === selSubjectId &&
-                    selectedSlots.includes(r.lectureSlot || 1) &&
-                    visibleStudentIds.has(r.studentId)
-                 )
-                 .map(r => r.id);
-             
-             await db.deleteAttendance(toDeleteIds);
-             setSaveMessage('Attendance Records Cleared.');
-        } else {
-             const records: AttendanceRecord[] = [];
-             const timestamp = Date.now();
-        
-             selectedSlots.forEach(slot => {
-                 visibleStudents.forEach(s => {
-                     records.push({
-                         // ID construction ensures overwrite for same date/student/subject/slot
-                         id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
-                         date: attendanceDate,
-                         studentId: s.uid,
-                         subjectId: selSubjectId,
-                         branchId: selBranchId,
-                         batchId: s.studentData!.batchId!, // Use student's actual batch
-                         isPresent: attendanceStatus[s.uid] ?? true,
-                         markedBy: user.displayName,
-                         timestamp: timestamp,
-                         lectureSlot: slot
-                     });
-                 });
-             });
-        
-             await db.saveAttendance(records);
-             setSaveMessage(isEditMode ? 'Attendance Updated Successfully!' : 'Attendance Saved Successfully!');
-        }
-        
-        // Refresh Data
+        await db.saveAttendance(records);
+        setSaveMessage(isEditMode ? 'Attendance Updated Successfully!' : 'Attendance Saved Successfully!');
+        // Refresh History
         setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
         setTimeout(() => setSaveMessage(''), 3000);
     } catch (e: any) {
-        alert("Error: " + e.message);
+        alert("Error saving: " + e.message);
     } finally {
         setIsSaving(false);
     }
@@ -558,15 +520,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                      </div>
                      <div className="flex items-center gap-4 ml-auto">
                         {saveMessage && <span className="text-green-600 text-sm font-medium animate-pulse">{saveMessage}</span>}
-                        
-                        {isEditMode && (
-                            <Button variant="danger" onClick={handleDeleteClick} disabled={isSaving} className="mr-2">
-                                <Trash2 className="h-4 w-4 mr-2 inline" /> Clear Record
-                            </Button>
-                        )}
-                        
                         <Button onClick={handleSaveClick} disabled={isSaving} className="shadow-lg shadow-indigo-200">
-                           {isSaving ? 'Processing...' : isEditMode ? 'Update Attendance' : `Save Attendance`}
+                           {isSaving ? 'Saving...' : isEditMode ? 'Update Attendance' : `Save Attendance`}
                         </Button>
                      </div>
                   </div>
@@ -675,50 +630,30 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       )}
 
       {/* Confirmation Modal */}
-      <Modal 
-         isOpen={showConfirmModal} 
-         onClose={() => setShowConfirmModal(false)} 
-         title={actionType === 'DELETE' ? "Confirm Deletion" : (isEditMode ? "Confirm Update" : "Confirm Submission")}
-      >
+      <Modal isOpen={showConfirmModal} onClose={() => setShowConfirmModal(false)} title={isEditMode ? "Confirm Update" : "Confirm Submission"}>
          <div className="space-y-4">
-            {actionType === 'DELETE' ? (
-                <div className="p-4 bg-red-50 rounded-lg border border-red-200 text-red-800 text-sm">
-                    <div className="flex items-center gap-2 font-bold text-lg mb-2">
-                        <AlertCircle className="h-5 w-5" /> Warning
-                    </div>
-                    <p>You are about to permanently delete attendance records for <strong>{attendanceDate}</strong>.</p>
-                    <p className="mt-2 text-red-700">This action cannot be undone. Are you sure you want to clear the history for this slot?</p>
-                </div>
-            ) : (
-                <>
-                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
-                   <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
-                   <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
-                   <div className="flex justify-between"><span className="text-slate-500">Slots:</span> <span className="font-semibold text-slate-900">L{selectedSlots.join(', L')}</span></div>
-                   <div className="flex justify-between items-start"><span className="text-slate-500">Batches:</span> <div className="text-right font-semibold text-slate-900">{selectedMarkingBatches.map(b => metaData.batches[b]).join(', ')}</div></div>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4 text-center">
-                   <div className="p-3 bg-green-50 text-green-800 rounded-lg border border-green-100">
-                      <div className="text-2xl font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</div>
-                      <div className="text-xs uppercase font-semibold opacity-70">Present</div>
-                   </div>
-                   <div className="p-3 bg-red-50 text-red-800 rounded-lg border border-red-100">
-                      <div className="text-2xl font-bold">{visibleStudents.filter(s => !attendanceStatus[s.uid]).length}</div>
-                      <div className="text-xs uppercase font-semibold opacity-70">Absent</div>
-                   </div>
-                </div>
-                </>
-            )}
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
+               <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
+               <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
+               <div className="flex justify-between"><span className="text-slate-500">Slots:</span> <span className="font-semibold text-slate-900">L{selectedSlots.join(', L')}</span></div>
+               <div className="flex justify-between items-start"><span className="text-slate-500">Batches:</span> <div className="text-right font-semibold text-slate-900">{selectedMarkingBatches.map(b => metaData.batches[b]).join(', ')}</div></div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 text-center">
+               <div className="p-3 bg-green-50 text-green-800 rounded-lg border border-green-100">
+                  <div className="text-2xl font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</div>
+                  <div className="text-xs uppercase font-semibold opacity-70">Present</div>
+               </div>
+               <div className="p-3 bg-red-50 text-red-800 rounded-lg border border-red-100">
+                  <div className="text-2xl font-bold">{visibleStudents.filter(s => !attendanceStatus[s.uid]).length}</div>
+                  <div className="text-xs uppercase font-semibold opacity-70">Absent</div>
+               </div>
+            </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
-               <Button 
-                 onClick={handleConfirmAction} 
-                 disabled={isSaving} 
-                 variant={actionType === 'DELETE' ? 'danger' : 'primary'}
-               >
-                  {isSaving ? 'Processing...' : (actionType === 'DELETE' ? 'Yes, Delete Records' : 'Confirm & Save')}
+               <Button onClick={executeSave} disabled={isSaving}>
+                  {isSaving ? 'Processing...' : 'Confirm & Save'}
                </Button>
             </div>
          </div>
