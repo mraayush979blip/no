@@ -40,7 +40,7 @@ export const AdminDashboard: React.FC = () => {
   );
 };
 
-// ... AdminStudentDetail component remains same ...
+// ... AdminStudentDetail component ...
 const AdminStudentDetail: React.FC<{ student: User; onBack: () => void }> = ({ student, onBack }) => {
     const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -239,6 +239,8 @@ const StudentManagement: React.FC = () => {
     </Card>
   );
 };
+
+// --- Faculty Management Logic ---
 
 const FacultyDetailView: React.FC<{ faculty: User; onBack: () => void }> = ({ faculty, onBack }) => {
   const [assignments, setAssignments] = useState<FacultyAssignment[]>([]);
@@ -501,6 +503,11 @@ const FacultyManagement: React.FC = () => {
       return <FacultyDetailView faculty={selectedFaculty} onBack={() => { setSelectedFaculty(null); loadData(); }} />;
   }
 
+  const getFacultyName = (uid: string) => faculty.find(f => f.uid === uid)?.displayName || uid;
+  const getSubjectName = (sid: string) => subjects.find(s => s.id === sid)?.name || sid;
+  const getBranchName = (bid: string) => branches.find(b => b.id === bid)?.name || bid;
+  const getBatchName = (bid: string) => bid === 'ALL' ? 'All Batches' : (batchMap[bid] || bid);
+
   return (
      <div className="space-y-6">
        <div className="flex space-x-1 bg-slate-200 p-1 rounded-lg w-fit">
@@ -535,4 +542,67 @@ const FacultyManagement: React.FC = () => {
                                 <tr>
                                     <th className="p-3 text-slate-900">Name</th>
                                     <th className="p-3 text-slate-900">Email</th>
-                                    
+                                    <th className="p-3 text-right text-slate-900">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {faculty.map(f => (
+                                    <tr key={f.uid} className="hover:bg-slate-50 group">
+                                        <td className="p-3 font-medium text-slate-900 cursor-pointer text-indigo-700 hover:underline" onClick={() => setSelectedFaculty(f)}>{f.displayName}</td>
+                                        <td className="p-3 text-slate-600">{f.email}</td>
+                                        <td className="p-3 text-right">
+                                            <button onClick={() => setSelectedFaculty(f)} className="text-indigo-500 hover:text-indigo-700 mr-3"><Edit2 className="h-4 w-4" /></button>
+                                            <button onClick={() => handleDeleteFaculty(f.uid)} className="text-slate-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {faculty.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-slate-400">No faculty found.</td></tr>}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 h-fit sticky top-4">
+                    <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2"><Plus className="h-4 w-4" /> Add New Faculty</h4>
+                    <form onSubmit={handleAddFaculty} className="space-y-3">
+                        <Input label="Name" value={newFac.name} onChange={e => setNewFac({...newFac, name: e.target.value})} required className="bg-white" />
+                        <Input label="Email" type="email" value={newFac.email} onChange={e => setNewFac({...newFac, email: e.target.value})} required className="bg-white" />
+                        <Input label="Initial Password" type="text" value={newFac.password} onChange={e => setNewFac({...newFac, password: e.target.value})} placeholder="Default: password123" className="bg-white" />
+                        <Button type="submit" className="w-full">Create Account</Button>
+                    </form>
+                </div>
+            </div>
+         </Card>
+       )}
+
+       {activeSubTab==='allocations' && (
+           <Card>
+               <h3 className="text-lg font-bold text-slate-800 mb-4">Global Allocations</h3>
+               <p className="text-sm text-slate-500 mb-4">This is a read-only view of all teaching assignments across the institute. To manage assignments, go to the Faculty Directory and select a specific faculty member.</p>
+               <div className="overflow-hidden rounded-lg border border-slate-200">
+                   <table className="w-full text-sm text-left">
+                       <thead className="bg-slate-50 border-b">
+                           <tr>
+                               <th className="p-3 text-slate-900">Faculty</th>
+                               <th className="p-3 text-slate-900">Subject</th>
+                               <th className="p-3 text-slate-900">Branch</th>
+                               <th className="p-3 text-slate-900">Batch</th>
+                           </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-100">
+                           {assignments.map(a => (
+                               <tr key={a.id} className="hover:bg-slate-50">
+                                   <td className="p-3 font-medium text-indigo-700">{getFacultyName(a.facultyId)}</td>
+                                   <td className="p-3 text-slate-900">{getSubjectName(a.subjectId)}</td>
+                                   <td className="p-3 text-slate-600">{getBranchName(a.branchId)}</td>
+                                   <td className="p-3 text-slate-600">{getBatchName(a.batchId)}</td>
+                               </tr>
+                           ))}
+                           {assignments.length === 0 && <tr><td colSpan={4} className="p-4 text-center text-slate-400">No assignments found.</td></tr>}
+                       </tbody>
+                   </table>
+               </div>
+           </Card>
+       )}
+     </div>
+  );
+};
