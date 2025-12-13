@@ -56,8 +56,10 @@ interface IDataService {
   
   // Attendance
   getAttendance: (branchId: string, batchId: string, subjectId: string, date?: string) => Promise<AttendanceRecord[]>;
+  getBranchAttendance: (branchId: string, date: string) => Promise<AttendanceRecord[]>;
   getStudentAttendance: (studentId: string) => Promise<AttendanceRecord[]>;
   saveAttendance: (records: AttendanceRecord[]) => Promise<void>;
+  deleteAttendanceRecords: (ids: string[]) => Promise<void>;
   
   // Setup
   seedDatabase: () => Promise<void>;
@@ -367,6 +369,13 @@ class FirebaseService implements IDataService {
     }
     return records.filter(r => r.batchId === batchId && (!date || r.date === date));
   }
+
+  async getBranchAttendance(branchId: string, date: string): Promise<AttendanceRecord[]> {
+      const q = query(collection(firestore, "attendance"), where("branchId", "==", branchId));
+      const snap = await getDocs(q);
+      const records = snap.docs.map(d => d.data() as AttendanceRecord);
+      return records.filter(r => r.date === date);
+  }
   
   async getStudentAttendance(studentId: string): Promise<AttendanceRecord[]> {
     const q = query(collection(firestore, "attendance"), where("studentId", "==", studentId));
@@ -376,6 +385,13 @@ class FirebaseService implements IDataService {
   async saveAttendance(records: AttendanceRecord[]): Promise<void> {
     const batch = writeBatch(firestore);
     records.forEach(rec => batch.set(doc(firestore, "attendance", rec.id), rec));
+    await batch.commit();
+  }
+  
+  async deleteAttendanceRecords(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const batch = writeBatch(firestore);
+    ids.forEach(id => batch.delete(doc(firestore, "attendance", id)));
     await batch.commit();
   }
 
@@ -557,6 +573,12 @@ class MockService implements IDataService {
     }
     return filtered.filter(a => a.batchId === batchId && (!date || a.date === date));
   }
+  
+  async getBranchAttendance(branchId: string, date: string) {
+      const all = this.load('ams_attendance', []) as AttendanceRecord[];
+      return all.filter(a => a.branchId === branchId && a.date === date);
+  }
+
   async getStudentAttendance(studentId: string) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
     return all.filter(a => a.studentId === studentId);
@@ -570,6 +592,14 @@ class MockService implements IDataService {
       this.save('ams_attendance', Array.from(recordMap.values()));
     }
   }
+  
+  async deleteAttendanceRecords(ids: string[]) {
+    let all = this.load('ams_attendance', []) as AttendanceRecord[];
+    const idsSet = new Set(ids);
+    all = all.filter(a => !idsSet.has(a.id));
+    this.save('ams_attendance', all);
+  }
+
   async seedDatabase() { 
       localStorage.setItem('ams_branches', JSON.stringify(SEED_BRANCHES));
       localStorage.setItem('ams_batches', JSON.stringify(SEED_BATCHES));

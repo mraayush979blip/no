@@ -56,12 +56,14 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   // Conflict State
   const [conflictDetails, setConflictDetails] = useState<{ 
       markedBy: string; 
+      subjectName: string;
       slot: number;
       date: string;
       totalRecords: number;
       presentCount: number;
       timestamp: number;
   } | null>(null);
+  const [idsToDelete, setIdsToDelete] = useState<string[]>([]);
 
   // Multi-Batch Selection State
   const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
@@ -240,41 +242,53 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     
     setIsSaving(true);
     setConflictDetails(null);
+    setIdsToDelete([]);
 
     try {
-        // Fetch fresh data for this specific date to check conflicts accurately
-        const freshRecords = await db.getAttendance(selBranchId, 'ALL', selSubjectId, attendanceDate);
+        // Fetch ALL attendance records for this branch/date to detect cross-subject conflicts
+        const branchRecords = await db.getBranchAttendance(selBranchId, attendanceDate);
         
         let detectedConflict = null;
+        let conflictIds: string[] = [];
         const visibleIds = new Set(visibleStudents.map(s => s.uid));
 
-        // Check if any of the visible students already have a record for the selected slots
-        // that was marked by someone else.
+        // Iterate through selected slots and visible students
         for (const slot of selectedSlots) {
-            const relevant = freshRecords.filter(r => 
-                r.lectureSlot === slot && visibleIds.has(r.studentId)
-            );
-            
-            const foreignRecord = relevant.find(r => r.markedBy !== user.displayName);
-            if (foreignRecord) {
-                // Detected a conflict! Gather detailed statistics for the warning modal.
-                const conflictStats = {
-                    present: relevant.filter(r => r.isPresent).length,
-                    total: relevant.length
-                };
-
-                detectedConflict = { 
-                    markedBy: foreignRecord.markedBy, 
-                    slot: slot,
-                    date: attendanceDate,
-                    totalRecords: conflictStats.total,
-                    presentCount: conflictStats.present,
-                    timestamp: foreignRecord.timestamp
-                };
-                break;
-            }
+             const overlappingRecords = branchRecords.filter(r => 
+                 r.lectureSlot === slot && visibleIds.has(r.studentId)
+             );
+             
+             if (overlappingRecords.length > 0) {
+                 conflictIds = [...conflictIds, ...overlappingRecords.map(r => r.id)];
+                 
+                 // Look for a record that is NOT from the current session context (Conflict)
+                 // A conflict is when someone else marked it, OR when I marked it for a DIFFERENT subject
+                 const conflictRec = overlappingRecords.find(r => 
+                    r.subjectId !== selSubjectId || r.markedBy !== user.displayName
+                 );
+                 
+                 if (conflictRec) {
+                     // We found a meaningful conflict!
+                     const conflictStats = {
+                        present: overlappingRecords.filter(r => r.isPresent).length,
+                        total: overlappingRecords.length
+                     };
+                     
+                     detectedConflict = { 
+                        markedBy: conflictRec.markedBy, 
+                        subjectName: metaData.subjects[conflictRec.subjectId]?.name || 'Unknown Subject',
+                        slot: slot,
+                        date: attendanceDate,
+                        totalRecords: conflictStats.total,
+                        presentCount: conflictStats.present,
+                        timestamp: conflictRec.timestamp
+                     };
+                     break; // Show the first significant conflict found
+                 }
+             }
         }
         
+        setIdsToDelete(conflictIds);
         setConflictDetails(detectedConflict);
         setShowConfirmModal(true);
     } catch (e: any) {
@@ -288,7 +302,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const executeSave = async () => {
     setIsSaving(true);
     setSaveMessage('');
-    // setShowConfirmModal(false); // Closed after success to show state
     
     const records: AttendanceRecord[] = [];
     const timestamp = Date.now();
@@ -296,8 +309,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     selectedSlots.forEach(slot => {
         visibleStudents.forEach(s => {
             records.push({
-                // ID construction ensures overwrite for same date/student/subject/slot
-                id: `${attendanceDate}_${s.uid}_${selSubjectId}_L${slot}`,
+                // NEW ID SCHEMA: ${Date}_${StudentId}_L${Slot}
+                // This ensures enforce uniqueness per slot per student regardless of subject
+                id: `${attendanceDate}_${s.uid}_L${slot}`,
                 date: attendanceDate,
                 studentId: s.uid,
                 subjectId: selSubjectId,
@@ -312,8 +326,16 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     });
 
     try {
+        // 1. Delete old overlapping records (Cleanup duplicates/old ID formats)
+        if (idsToDelete.length > 0) {
+            await db.deleteAttendanceRecords(idsToDelete);
+        }
+
+        // 2. Save new records
         await db.saveAttendance(records);
-        setSaveMessage(isEditMode ? 'Attendance Updated Successfully!' : 'Attendance Saved Successfully!');
+
+        setSaveMessage('Attendance Saved & Synced!');
+        
         // Refresh History
         setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
         setTimeout(() => setSaveMessage(''), 3000);
@@ -323,6 +345,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     } finally {
         setIsSaving(false);
         setConflictDetails(null);
+        setIdsToDelete([]);
     }
   };
 
@@ -700,11 +723,12 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                         <div>
                             <h4 className="font-bold text-orange-900 text-sm uppercase tracking-wide">Existing Record Found</h4>
                             <p className="text-orange-800 text-sm mt-1">
-                                Attendance for <span className="font-semibold">Slot {conflictDetails.slot}</span> on <span className="font-semibold">{conflictDetails.date}</span> was previously marked by:
+                                Attendance for <span className="font-semibold">Slot {conflictDetails.slot}</span> on <span className="font-semibold">{conflictDetails.date}</span> was previously marked for:
                             </p>
                             <div className="mt-3 bg-white/60 p-3 rounded border border-orange-200">
-                                <div className="font-bold text-orange-900">{conflictDetails.markedBy}</div>
-                                <div className="text-xs text-orange-700 mt-0.5">
+                                <div className="font-bold text-lg text-orange-900">{conflictDetails.subjectName}</div>
+                                <div className="text-sm font-medium text-orange-800">by {conflictDetails.markedBy}</div>
+                                <div className="text-xs text-orange-700 mt-1">
                                     Last Updated: {new Date(conflictDetails.timestamp).toLocaleString()}
                                 </div>
                                 <div className="flex gap-4 mt-2 text-xs font-medium text-slate-600">
@@ -718,6 +742,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                  
                  <div className="text-sm text-slate-600 px-2">
                     <p>You are about to overwrite these <span className="font-bold">{conflictDetails.totalRecords} records</span> with your current selection.</p>
+                    <p className="text-xs text-slate-400 mt-1 italic">This will resolve any duplicate entries for this slot.</p>
                  </div>
 
                  <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
