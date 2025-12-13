@@ -87,22 +87,6 @@ class FirebaseService implements IDataService {
     }
   }
 
-  // --- Logic to enforce "Latest Record Wins" for a given Slot ---
-  private deduplicateRecords(records: AttendanceRecord[]): AttendanceRecord[] {
-    const map = new Map<string, AttendanceRecord>();
-    records.forEach(r => {
-        // Unique Key: Date + Student + Slot
-        // This merges records from different subjects if they share the same slot
-        const key = `${r.date}_${r.studentId}_L${r.lectureSlot || 1}`;
-        const existing = map.get(key);
-        // If we have a duplicate, keep the one with the LATER timestamp
-        if (!existing || r.timestamp > existing.timestamp) {
-            map.set(key, r);
-        }
-    });
-    return Array.from(map.values());
-  }
-
   async login(email: string, pass: string): Promise<User> {
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const uid = cred.user.uid;
@@ -358,17 +342,14 @@ class FirebaseService implements IDataService {
   async getBranchAttendance(branchId: string, date: string): Promise<AttendanceRecord[]> {
       const q = query(collection(firestore, "attendance"), where("branchId", "==", branchId));
       const snap = await getDocs(q);
-      const raw = snap.docs.map(d => d.data() as AttendanceRecord).filter(r => r.date === date);
-      // Deduplicate to ensure we only see the winning record per slot
-      return this.deduplicateRecords(raw);
+      const records = snap.docs.map(d => d.data() as AttendanceRecord);
+      return records.filter(r => r.date === date);
   }
   
   async getStudentAttendance(studentId: string): Promise<AttendanceRecord[]> {
     const q = query(collection(firestore, "attendance"), where("studentId", "==", studentId));
     const snap = await getDocs(q);
-    const raw = snap.docs.map(d => d.data() as AttendanceRecord);
-    // Deduplicate so student analytics are correct even if ghosts exist
-    return this.deduplicateRecords(raw);
+    return snap.docs.map(d => d.data() as AttendanceRecord);
   }
 
   async saveAttendance(records: AttendanceRecord[]): Promise<void> {
@@ -406,18 +387,6 @@ class MockService implements IDataService {
   private save(key: string, data: any[]) { localStorage.setItem(key, JSON.stringify(data)); }
   constructor() { 
       if (!localStorage.getItem('ams_branches')) this.seedDatabase(); 
-  }
-
-  private deduplicateRecords(records: AttendanceRecord[]): AttendanceRecord[] {
-    const map = new Map<string, AttendanceRecord>();
-    records.forEach(r => {
-        const key = `${r.date}_${r.studentId}_L${r.lectureSlot || 1}`;
-        const existing = map.get(key);
-        if (!existing || r.timestamp > existing.timestamp) {
-            map.set(key, r);
-        }
-    });
-    return Array.from(map.values());
   }
 
   async login(email: string, pass: string): Promise<User> {
@@ -565,21 +534,21 @@ class MockService implements IDataService {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
     let filtered = all.filter(a => a.branchId === branchId && a.subjectId === subjectId);
     if (batchId === 'ALL') {
-        return filtered.filter(a => !date || a.date === date);
+        filtered = filtered.filter(a => !date || a.date === date);
+    } else {
+        filtered = filtered.filter(a => a.batchId === batchId && (!date || a.date === date));
     }
-    return filtered.filter(a => a.batchId === batchId && (!date || a.date === date));
+    return filtered;
   }
   
   async getBranchAttendance(branchId: string, date: string) {
       const all = this.load('ams_attendance', []) as AttendanceRecord[];
-      const raw = all.filter(a => a.branchId === branchId && a.date === date);
-      return this.deduplicateRecords(raw);
+      return all.filter(a => a.branchId === branchId && a.date === date);
   }
 
   async getStudentAttendance(studentId: string) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
-    const raw = all.filter(a => a.studentId === studentId);
-    return this.deduplicateRecords(raw);
+    return all.filter(a => a.studentId === studentId);
   }
   async saveAttendance(records: AttendanceRecord[]) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];

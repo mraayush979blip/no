@@ -3,7 +3,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { db } from '../services/db';
 import { User, FacultyAssignment, AttendanceRecord, Batch } from '../types';
 import { Button, Card, Modal } from '../components/UI';
-import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle, AlertCircle } from 'lucide-react';
+import { Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X, CheckSquare, Square, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 
 interface FacultyProps { user: User; }
 
@@ -175,9 +175,6 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
      }
      
      setIsEditMode(foundExisting);
-     // Only update status if we found records (Edit Mode) OR if the list of students changed significantly (to init them)
-     // To allow manual toggling without reset when just switching views, we'd need more complex state. 
-     // For now, changing Date/Slot/Batch loads the "Source of Truth" (DB or Default).
      setAttendanceStatus(newStatus);
   }, [selectedMarkingBatches, attendanceDate, selectedSlots, allClassRecords, selBranchId, selSubjectId, allBranchStudents]);
 
@@ -309,8 +306,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     selectedSlots.forEach(slot => {
         visibleStudents.forEach(s => {
             records.push({
-                // NEW ID SCHEMA: ${Date}_${StudentId}_L${Slot}
-                // This ensures enforce uniqueness per slot per student regardless of subject
+                // CANONICAL ID SCHEMA: ${Date}_${Student}_L${Slot}
+                // This guarantees only ONE record exists in the DB per slot.
+                // Writing to this ID will implicitly overwrite any existing record.
                 id: `${attendanceDate}_${s.uid}_L${slot}`,
                 date: attendanceDate,
                 studentId: s.uid,
@@ -326,19 +324,24 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     });
 
     try {
-        // 1. Delete old overlapping records (Cleanup duplicates/old ID formats)
+        // 1. Try to delete old records (Cleanup duplicates if any)
+        // This is crucial for migrating from old non-canonical IDs.
         if (idsToDelete.length > 0) {
             try {
                 await db.deleteAttendanceRecords(idsToDelete);
-            } catch (delError) {
-                // If we lack permission to delete old records (created by others),
-                // we proceed anyway. The Read logic in db.ts has been updated to de-duplicate
-                // and show the latest record, essentially "shadowing" the old one.
-                console.warn("Could not delete old conflicting records (likely permission issue). Proceeding to overwrite logic.");
+            } catch (delError: any) {
+                 if (delError.code === 'permission-denied') {
+                     // IMPORTANT: If delete fails, we proceed. 
+                     // The new record will be saved. The old duplicate will remain (Ghost Record).
+                     // This is why users must update DB rules for full cleanup.
+                     console.warn("Permission denied while cleaning up old records. Please update Firestore Rules.");
+                 } else {
+                     console.warn("Could not delete old records", delError);
+                 }
             }
         }
 
-        // 2. Save new records
+        // 2. Direct Overwrite (Upsert)
         await db.saveAttendance(records);
 
         setSaveMessage('Attendance Saved & Synced!');
@@ -348,7 +351,11 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
         setTimeout(() => setSaveMessage(''), 3000);
         setShowConfirmModal(false);
     } catch (e: any) {
-        alert("Error saving: " + e.message);
+        if (e.code === 'permission-denied') {
+            alert("PERMISSION DENIED: You cannot overwrite existing attendance. Please update Firestore Rules to 'allow write' for the attendance collection.");
+        } else {
+            alert("Error saving: " + e.message);
+        }
     } finally {
         setIsSaving(false);
         setConflictDetails(null);
@@ -720,41 +727,43 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       <Modal 
         isOpen={showConfirmModal} 
         onClose={() => setShowConfirmModal(false)} 
-        title={conflictDetails ? "⚠️ Conflict Detected" : (isEditMode ? "Confirm Update" : "Confirm Submission")}
+        title={conflictDetails ? "⚠️ ATTENTION: CONFLICT" : (isEditMode ? "Confirm Update" : "Confirm Submission")}
       >
          {conflictDetails ? (
              <div className="space-y-4 animate-in fade-in zoom-in duration-200">
-                 <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-r-md">
-                    <div className="flex items-start gap-3">
-                        <AlertCircle className="h-6 w-6 text-orange-600 flex-shrink-0" />
+                 <div className="bg-red-50 border-l-4 border-red-600 p-5 rounded-r-md">
+                    <div className="flex items-start gap-4">
+                        <AlertTriangle className="h-8 w-8 text-red-600 flex-shrink-0" />
                         <div>
-                            <h4 className="font-bold text-orange-900 text-sm uppercase tracking-wide">Existing Record Found</h4>
-                            <p className="text-orange-800 text-sm mt-1">
-                                Attendance for <span className="font-semibold">Slot {conflictDetails.slot}</span> on <span className="font-semibold">{conflictDetails.date}</span> was previously marked for:
+                            <h4 className="font-extrabold text-red-900 text-base uppercase tracking-wide">Record Already Exists</h4>
+                            <p className="text-red-900 text-sm mt-1">
+                                Attendance for <span className="font-bold underline">Slot {conflictDetails.slot}</span> on <span className="font-bold">{conflictDetails.date}</span> was previously marked.
                             </p>
-                            <div className="mt-3 bg-white/60 p-3 rounded border border-orange-200">
-                                <div className="font-bold text-lg text-orange-900">{conflictDetails.subjectName}</div>
-                                <div className="text-sm font-medium text-orange-800">by {conflictDetails.markedBy}</div>
-                                <div className="text-xs text-orange-700 mt-1">
+                            
+                            <div className="mt-4 bg-white p-4 rounded border border-red-200 shadow-sm">
+                                <div className="text-xs text-slate-500 uppercase font-semibold mb-1">Previous Entry By</div>
+                                <div className="font-bold text-lg text-slate-800">{conflictDetails.markedBy}</div>
+                                <div className="text-sm font-medium text-indigo-700 mb-1">{conflictDetails.subjectName}</div>
+                                <div className="text-xs text-slate-500 border-t border-slate-100 pt-2 mt-2">
                                     Last Updated: {new Date(conflictDetails.timestamp).toLocaleString()}
                                 </div>
-                                <div className="flex gap-4 mt-2 text-xs font-medium text-slate-600">
-                                    <span className="flex items-center"><CheckCircle2 className="h-3 w-3 mr-1 text-green-600"/> {conflictDetails.presentCount} Present</span>
-                                    <span className="flex items-center"><XCircle className="h-3 w-3 mr-1 text-red-600"/> {conflictDetails.totalRecords - conflictDetails.presentCount} Absent</span>
+                                <div className="flex gap-4 mt-3 text-sm font-medium text-slate-700 bg-slate-50 p-2 rounded">
+                                    <span className="flex items-center"><CheckCircle2 className="h-4 w-4 mr-1 text-green-600"/> {conflictDetails.presentCount} Present</span>
+                                    <span className="flex items-center"><XCircle className="h-4 w-4 mr-1 text-red-600"/> {conflictDetails.totalRecords - conflictDetails.presentCount} Absent</span>
                                 </div>
                             </div>
                         </div>
                     </div>
                  </div>
                  
-                 <div className="text-sm text-slate-600 px-2">
-                    <p>You are about to overwrite these <span className="font-bold">{conflictDetails.totalRecords} records</span> with your current selection.</p>
-                    <p className="text-xs text-slate-400 mt-1 italic">This will resolve any duplicate entries for this slot.</p>
+                 <div className="px-2">
+                    <p className="font-semibold text-slate-800 text-sm">Action Required:</p>
+                    <p className="text-sm text-slate-600 mt-1">You are about to <span className="font-bold text-red-600">OVERWRITE</span> the existing attendance record with your current selection.</p>
                  </div>
 
-                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 mt-2">
                      <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
-                     <Button variant="danger" onClick={executeSave} disabled={isSaving}>Overwrite & Save</Button>
+                     <Button variant="danger" onClick={executeSave} disabled={isSaving}>YES, OVERWRITE</Button>
                  </div>
              </div>
          ) : (
