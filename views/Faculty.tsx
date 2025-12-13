@@ -198,8 +198,13 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     if (!selBranchId || !selSubjectId) return [];
     
     const rel = assignments.filter(a => a.branchId === selBranchId && a.subjectId === selSubjectId);
+    
     // If we have an 'ALL' assignment, allow selecting from ALL batches in branch
-    if (rel.some(a => a.batchId === 'ALL')) return metaData.rawBatches.filter(b => b.branchId === selBranchId).map(b => b.id);
+    if (rel.some(a => a.batchId === 'ALL')) {
+        return metaData.rawBatches
+            .filter(b => b.branchId === selBranchId)
+            .map(b => ({ id: b.id, name: b.name }));
+    }
 
     const bids = Array.from(new Set(rel.map(a => a.batchId)));
     return bids.map(bid => ({ id: bid, name: metaData.batches[bid] || bid }));
