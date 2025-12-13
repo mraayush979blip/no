@@ -52,6 +52,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [conflictDetails, setConflictDetails] = useState<{ markedBy: string; slot: number } | null>(null);
 
   // Multi-Batch Selection State
   const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
@@ -224,16 +225,48 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       });
   };
 
-  const handleSaveClick = () => {
+  const handleSaveClick = async () => {
     if (selectedSlots.length === 0) { alert("Please select at least one lecture slot."); return; }
     if (visibleStudents.length === 0) { alert("No students selected."); return; }
-    setShowConfirmModal(true);
+    
+    setIsSaving(true);
+    setConflictDetails(null);
+
+    try {
+        // Fetch fresh data for this specific date to check conflicts accurately
+        const freshRecords = await db.getAttendance(selBranchId, 'ALL', selSubjectId, attendanceDate);
+        
+        let detectedConflict = null;
+        const visibleIds = new Set(visibleStudents.map(s => s.uid));
+
+        // Check if any of the visible students already have a record for the selected slots
+        // that was marked by someone else.
+        for (const slot of selectedSlots) {
+            const relevant = freshRecords.filter(r => 
+                r.lectureSlot === slot && visibleIds.has(r.studentId)
+            );
+            
+            const foreignRecord = relevant.find(r => r.markedBy !== user.displayName);
+            if (foreignRecord) {
+                detectedConflict = { markedBy: foreignRecord.markedBy, slot: slot };
+                break;
+            }
+        }
+        
+        setConflictDetails(detectedConflict);
+        setShowConfirmModal(true);
+    } catch (e: any) {
+        console.error(e);
+        alert("Error verifying records: " + e.message);
+    } finally {
+        setIsSaving(false);
+    }
   };
 
   const executeSave = async () => {
     setIsSaving(true);
     setSaveMessage('');
-    setShowConfirmModal(false);
+    // setShowConfirmModal(false); // Closed after success to show state
     
     const records: AttendanceRecord[] = [];
     const timestamp = Date.now();
@@ -262,10 +295,12 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
         // Refresh History
         setAllClassRecords(await db.getAttendance(selBranchId, 'ALL', selSubjectId));
         setTimeout(() => setSaveMessage(''), 3000);
+        setShowConfirmModal(false);
     } catch (e: any) {
         alert("Error saving: " + e.message);
     } finally {
         setIsSaving(false);
+        setConflictDetails(null);
     }
   };
 
@@ -521,7 +556,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
                      <div className="flex items-center gap-4 ml-auto">
                         {saveMessage && <span className="text-green-600 text-sm font-medium animate-pulse">{saveMessage}</span>}
                         <Button onClick={handleSaveClick} disabled={isSaving} className="shadow-lg shadow-indigo-200">
-                           {isSaving ? 'Saving...' : isEditMode ? 'Update Attendance' : `Save Attendance`}
+                           {isSaving ? 'Processing...' : isEditMode ? 'Update Attendance' : `Save Attendance`}
                         </Button>
                      </div>
                   </div>
@@ -632,6 +667,22 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
       {/* Confirmation Modal */}
       <Modal isOpen={showConfirmModal} onClose={() => setShowConfirmModal(false)} title={isEditMode ? "Confirm Update" : "Confirm Submission"}>
          <div className="space-y-4">
+            {/* Conflict Warning Block */}
+            {conflictDetails && (
+               <div className="mb-4 p-4 bg-orange-50 border-l-4 border-orange-500 rounded-r-md flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                  <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-orange-800">
+                     <p className="font-bold">Conflict Detected</p>
+                     <p>
+                        Attendance for <span className="font-semibold">Lecture Slot {conflictDetails.slot}</span> has already been marked by <span className="font-semibold">{conflictDetails.markedBy}</span>.
+                     </p>
+                     <p className="mt-1 text-orange-900 font-medium">
+                        Confirming will overwrite the existing records with your latest data.
+                     </p>
+                  </div>
+               </div>
+            )}
+
             <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
                <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
                <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
@@ -652,8 +703,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
-               <Button onClick={executeSave} disabled={isSaving}>
-                  {isSaving ? 'Processing...' : 'Confirm & Save'}
+               <Button onClick={executeSave} disabled={isSaving} variant={conflictDetails ? "danger" : "primary"}>
+                  {isSaving ? 'Processing...' : conflictDetails ? 'Overwrite & Save' : 'Confirm & Save'}
                </Button>
             </div>
          </div>
