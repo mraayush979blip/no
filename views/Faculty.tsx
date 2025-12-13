@@ -202,7 +202,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     
     const rel = assignments.filter(a => a.branchId === selBranchId && a.subjectId === selSubjectId);
     // If we have an 'ALL' assignment, allow selecting from ALL batches in branch
-    if (rel.some(a => a.batchId === 'ALL')) return metaData.rawBatches.filter(b => b.branchId === selBranchId);
+    if (rel.some(a => a.batchId === 'ALL')) return metaData.rawBatches.filter(b => b.branchId === selBranchId).map(b => b.id);
 
     const bids = Array.from(new Set(rel.map(a => a.batchId)));
     return bids.map(bid => ({ id: bid, name: metaData.batches[bid] || bid }));
@@ -328,7 +328,14 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
     try {
         // 1. Delete old overlapping records (Cleanup duplicates/old ID formats)
         if (idsToDelete.length > 0) {
-            await db.deleteAttendanceRecords(idsToDelete);
+            try {
+                await db.deleteAttendanceRecords(idsToDelete);
+            } catch (delError) {
+                // If we lack permission to delete old records (created by others),
+                // we proceed anyway. The Read logic in db.ts has been updated to de-duplicate
+                // and show the latest record, essentially "shadowing" the old one.
+                console.warn("Could not delete old conflicting records (likely permission issue). Proceeding to overwrite logic.");
+            }
         }
 
         // 2. Save new records

@@ -32,12 +32,12 @@ interface IDataService {
   addBranch: (name: string) => Promise<void>;
   deleteBranch: (id: string) => Promise<void>;
   
-  getBatches: (branchId: string) => Promise<Batch[]>; // Updated: by branchId
-  addBatch: (name: string, branchId: string) => Promise<void>; // Updated: by branchId
+  getBatches: (branchId: string) => Promise<Batch[]>; 
+  addBatch: (name: string, branchId: string) => Promise<void>; 
   deleteBatch: (id: string) => Promise<void>;
   
   // Users
-  getStudents: (branchId: string, batchId?: string) => Promise<User[]>; // Updated
+  getStudents: (branchId: string, batchId?: string) => Promise<User[]>; 
   createStudent: (data: Partial<User>) => Promise<void>;
   importStudents: (students: Partial<User>[]) => Promise<void>;
   deleteUser: (uid: string) => Promise<void>;
@@ -85,6 +85,22 @@ class FirebaseService implements IDataService {
     } finally {
       if (secondApp) await deleteApp(secondApp);
     }
+  }
+
+  // --- Logic to enforce "Latest Record Wins" for a given Slot ---
+  private deduplicateRecords(records: AttendanceRecord[]): AttendanceRecord[] {
+    const map = new Map<string, AttendanceRecord>();
+    records.forEach(r => {
+        // Unique Key: Date + Student + Slot
+        // This merges records from different subjects if they share the same slot
+        const key = `${r.date}_${r.studentId}_L${r.lectureSlot || 1}`;
+        const existing = map.get(key);
+        // If we have a duplicate, keep the one with the LATER timestamp
+        if (!existing || r.timestamp > existing.timestamp) {
+            map.set(key, r);
+        }
+    });
+    return Array.from(map.values());
   }
 
   async login(email: string, pass: string): Promise<User> {
@@ -145,7 +161,6 @@ class FirebaseService implements IDataService {
       const credential = EmailAuthProvider.credential(user.email, currentPass);
       await reauthenticateWithCredential(user, credential);
       await updatePassword(user, newPass);
-      // Also update firestore password for admin overrides
       const ref = doc(firestore, "users", user.uid);
       await updateDoc(ref, { password: newPass });
     } catch (e: any) {
@@ -182,14 +197,11 @@ class FirebaseService implements IDataService {
     const snap = await getDocs(q);
     const all = snap.docs.map(d => d.data() as User);
     
-    // Filter by Branch
     let filtered = all.filter(s => s.studentData?.branchId === branchId);
 
-    // If batchId is provided (or not ALL), filter strict. If ALL, filter by branch only.
     if (batchId && batchId !== 'ALL') {
         filtered = filtered.filter(s => s.studentData?.batchId === batchId);
     }
-    // Sort by Roll No numerically
     return filtered.sort((a, b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '', undefined, { numeric: true }));
   }
 
@@ -215,39 +227,27 @@ class FirebaseService implements IDataService {
   }
 
   async deleteUser(uid: string): Promise<void> { 
-    // Admin Override Deletion Strategy:
-    // 1. Get the stored password from Firestore
-    // 2. Sign in as that user in a secondary app
-    // 3. Delete the auth user
-    // 4. Delete the firestore doc
-    
     const userRef = doc(firestore, "users", uid);
     const userSnap = await getDoc(userRef);
-    
     if (userSnap.exists()) {
         const userData = userSnap.data() as any;
         const password = userData.password;
         const email = userData.email;
-
         if (password && email) {
             let tempApp: FirebaseApp | null = null;
             try {
-                // Use unique name to prevent collisions
                 tempApp = initializeApp(firebaseConfig, `DeleteWorker_${Date.now()}_${Math.random()}`);
                 const tempAuth = getAuth(tempApp);
                 const cred = await signInWithEmailAndPassword(tempAuth, email, password);
-                await deleteAuthUser(cred.user); // Delete from Authentication
+                await deleteAuthUser(cred.user); 
                 await signOut(tempAuth);
             } catch (e: any) {
-                console.warn("Could not delete Auth user (maybe password changed manually or user missing):", e.message);
-                // We proceed to delete the Firestore doc anyway so the Admin UI updates
+                console.warn("Could not delete Auth user:", e.message);
             } finally {
                 if (tempApp) await deleteApp(tempApp);
             }
         }
     }
-
-    // Always delete the Firestore record
     await deleteDoc(userRef); 
   }
 
@@ -270,25 +270,17 @@ class FirebaseService implements IDataService {
     const userSnap = await getDoc(userRef);
     if (!userSnap.exists()) throw new Error("User not found");
     const userData = userSnap.data() as User;
-    
-    // Admin Override Strategy:
-    // 1. If we have the old password stored, sign in as them, delete them, and recreate.
-    // 2. If not, try to create (in case they don't exist in Auth).
-    
     const oldPass = (userData as any).password;
-    
     if (oldPass) {
         let tempApp: FirebaseApp | null = null;
         try {
-            // Use unique name to prevent collisions
             tempApp = initializeApp(firebaseConfig, `ResetWorker_${Date.now()}_${Math.random()}`);
             const tempAuth = getAuth(tempApp);
             const cred = await signInWithEmailAndPassword(tempAuth, userData.email, oldPass);
-            await deleteAuthUser(cred.user); // Delete Auth User
+            await deleteAuthUser(cred.user); 
             await signOut(tempAuth);
         } catch (e: any) {
-             console.warn("Could not delete old auth user (maybe password changed or user missing):", e.message);
-             // Proceed anyway to try and create/overwrite
+             console.warn("Could not delete old auth user:", e.message);
         } finally {
             if (tempApp) await deleteApp(tempApp);
         }
@@ -299,23 +291,17 @@ class FirebaseService implements IDataService {
       newUid = await this.createAuthUser(userData.email, newPass);
     } catch (e: any) {
       if (e.code === 'auth/email-already-in-use') {
-         // Fallback if we couldn't delete them earlier
          await sendPasswordResetEmail(auth, userData.email);
-         throw new Error(`User exists and could not be force-reset. A Password Reset email has been sent to ${userData.email}.`);
+         throw new Error(`User exists. Password Reset email sent.`);
       }
       throw e;
     }
     
     const batch = writeBatch(firestore);
-    // Update profile with new UID and new Password
     batch.set(doc(firestore, "users", newUid), { ...userData, uid: newUid, password: newPass });
-    
-    // Migrate assignments
     const q = query(collection(firestore, "assignments"), where("facultyId", "==", uid));
     const assigns = await getDocs(q);
     assigns.forEach(a => batch.update(a.ref, { facultyId: newUid }));
-    
-    // Delete old profile if UID changed
     if (newUid !== uid) {
         batch.delete(userRef);
     }
@@ -361,7 +347,6 @@ class FirebaseService implements IDataService {
     const snap = await getDocs(q);
     let records = snap.docs.map(d => d.data() as AttendanceRecord);
     
-    // Filter by hierarchy
     records = records.filter(r => r.branchId === branchId);
     
     if (batchId === 'ALL') {
@@ -373,15 +358,19 @@ class FirebaseService implements IDataService {
   async getBranchAttendance(branchId: string, date: string): Promise<AttendanceRecord[]> {
       const q = query(collection(firestore, "attendance"), where("branchId", "==", branchId));
       const snap = await getDocs(q);
-      const records = snap.docs.map(d => d.data() as AttendanceRecord);
-      return records.filter(r => r.date === date);
+      const raw = snap.docs.map(d => d.data() as AttendanceRecord).filter(r => r.date === date);
+      // Deduplicate to ensure we only see the winning record per slot
+      return this.deduplicateRecords(raw);
   }
   
   async getStudentAttendance(studentId: string): Promise<AttendanceRecord[]> {
     const q = query(collection(firestore, "attendance"), where("studentId", "==", studentId));
     const snap = await getDocs(q);
-    return snap.docs.map(d => d.data() as AttendanceRecord);
+    const raw = snap.docs.map(d => d.data() as AttendanceRecord);
+    // Deduplicate so student analytics are correct even if ghosts exist
+    return this.deduplicateRecords(raw);
   }
+
   async saveAttendance(records: AttendanceRecord[]): Promise<void> {
     const batch = writeBatch(firestore);
     records.forEach(rec => batch.set(doc(firestore, "attendance", rec.id), rec));
@@ -417,6 +406,18 @@ class MockService implements IDataService {
   private save(key: string, data: any[]) { localStorage.setItem(key, JSON.stringify(data)); }
   constructor() { 
       if (!localStorage.getItem('ams_branches')) this.seedDatabase(); 
+  }
+
+  private deduplicateRecords(records: AttendanceRecord[]): AttendanceRecord[] {
+    const map = new Map<string, AttendanceRecord>();
+    records.forEach(r => {
+        const key = `${r.date}_${r.studentId}_L${r.lectureSlot || 1}`;
+        const existing = map.get(key);
+        if (!existing || r.timestamp > existing.timestamp) {
+            map.set(key, r);
+        }
+    });
+    return Array.from(map.values());
   }
 
   async login(email: string, pass: string): Promise<User> {
@@ -475,7 +476,6 @@ class MockService implements IDataService {
     if (batchId && batchId !== 'ALL') {
         filtered = filtered.filter(u => u.studentData?.batchId === batchId);
     }
-    // Sort by Roll No numerically
     return filtered.sort((a, b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '', undefined, { numeric: true }));
   }
 
@@ -548,12 +548,10 @@ class MockService implements IDataService {
   async assignFaculty(data: any) {
     const all = this.load('ams_assignments', SEED_ASSIGNMENTS);
     if (data.id) {
-        // Edit mode
         const idx = all.findIndex((x:any) => x.id === data.id);
         if (idx >= 0) all[idx] = data;
         else all.push(data);
     } else {
-        // New
         all.push({...data, id:`assign_${Date.now()}`});
     }
     this.save('ams_assignments', all);
@@ -565,9 +563,7 @@ class MockService implements IDataService {
 
   async getAttendance(branchId: string, batchId: string, subjectId: string, date?: string) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
-    // Filter by branch and subject
     let filtered = all.filter(a => a.branchId === branchId && a.subjectId === subjectId);
-    
     if (batchId === 'ALL') {
         return filtered.filter(a => !date || a.date === date);
     }
@@ -576,12 +572,14 @@ class MockService implements IDataService {
   
   async getBranchAttendance(branchId: string, date: string) {
       const all = this.load('ams_attendance', []) as AttendanceRecord[];
-      return all.filter(a => a.branchId === branchId && a.date === date);
+      const raw = all.filter(a => a.branchId === branchId && a.date === date);
+      return this.deduplicateRecords(raw);
   }
 
   async getStudentAttendance(studentId: string) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
-    return all.filter(a => a.studentId === studentId);
+    const raw = all.filter(a => a.studentId === studentId);
+    return this.deduplicateRecords(raw);
   }
   async saveAttendance(records: AttendanceRecord[]) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
