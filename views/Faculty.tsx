@@ -52,7 +52,16 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [conflictDetails, setConflictDetails] = useState<{ markedBy: string; slot: number } | null>(null);
+  
+  // Conflict State
+  const [conflictDetails, setConflictDetails] = useState<{ 
+      markedBy: string; 
+      slot: number;
+      date: string;
+      totalRecords: number;
+      presentCount: number;
+      timestamp: number;
+  } | null>(null);
 
   // Multi-Batch Selection State
   const [selectedMarkingBatches, setSelectedMarkingBatches] = useState<string[]>([]);
@@ -248,7 +257,20 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
             
             const foreignRecord = relevant.find(r => r.markedBy !== user.displayName);
             if (foreignRecord) {
-                detectedConflict = { markedBy: foreignRecord.markedBy, slot: slot };
+                // Detected a conflict! Gather detailed statistics for the warning modal.
+                const conflictStats = {
+                    present: relevant.filter(r => r.isPresent).length,
+                    total: relevant.length
+                };
+
+                detectedConflict = { 
+                    markedBy: foreignRecord.markedBy, 
+                    slot: slot,
+                    date: attendanceDate,
+                    totalRecords: conflictStats.total,
+                    presentCount: conflictStats.present,
+                    timestamp: foreignRecord.timestamp
+                };
                 break;
             }
         }
@@ -664,50 +686,73 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user }) => {
          </>
       )}
 
-      {/* Confirmation Modal */}
-      <Modal isOpen={showConfirmModal} onClose={() => setShowConfirmModal(false)} title={isEditMode ? "Confirm Update" : "Confirm Submission"}>
-         <div className="space-y-4">
-            {/* Conflict Warning Block */}
-            {conflictDetails && (
-               <div className="mb-4 p-4 bg-orange-50 border-l-4 border-orange-500 rounded-r-md flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
-                  <AlertCircle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
-                  <div className="text-sm text-orange-800">
-                     <p className="font-bold">Conflict Detected</p>
-                     <p>
-                        Attendance for <span className="font-semibold">Lecture Slot {conflictDetails.slot}</span> has already been marked by <span className="font-semibold">{conflictDetails.markedBy}</span>.
-                     </p>
-                     <p className="mt-1 text-orange-900 font-medium">
-                        Confirming will overwrite the existing records with your latest data.
-                     </p>
-                  </div>
-               </div>
-            )}
+      {/* Confirmation / Conflict Modal */}
+      <Modal 
+        isOpen={showConfirmModal} 
+        onClose={() => setShowConfirmModal(false)} 
+        title={conflictDetails ? "⚠️ Conflict Detected" : (isEditMode ? "Confirm Update" : "Confirm Submission")}
+      >
+         {conflictDetails ? (
+             <div className="space-y-4 animate-in fade-in zoom-in duration-200">
+                 <div className="bg-orange-50 border-l-4 border-orange-500 p-4 rounded-r-md">
+                    <div className="flex items-start gap-3">
+                        <AlertCircle className="h-6 w-6 text-orange-600 flex-shrink-0" />
+                        <div>
+                            <h4 className="font-bold text-orange-900 text-sm uppercase tracking-wide">Existing Record Found</h4>
+                            <p className="text-orange-800 text-sm mt-1">
+                                Attendance for <span className="font-semibold">Slot {conflictDetails.slot}</span> on <span className="font-semibold">{conflictDetails.date}</span> was previously marked by:
+                            </p>
+                            <div className="mt-3 bg-white/60 p-3 rounded border border-orange-200">
+                                <div className="font-bold text-orange-900">{conflictDetails.markedBy}</div>
+                                <div className="text-xs text-orange-700 mt-0.5">
+                                    Last Updated: {new Date(conflictDetails.timestamp).toLocaleString()}
+                                </div>
+                                <div className="flex gap-4 mt-2 text-xs font-medium text-slate-600">
+                                    <span className="flex items-center"><CheckCircle2 className="h-3 w-3 mr-1 text-green-600"/> {conflictDetails.presentCount} Present</span>
+                                    <span className="flex items-center"><XCircle className="h-3 w-3 mr-1 text-red-600"/> {conflictDetails.totalRecords - conflictDetails.presentCount} Absent</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                 </div>
+                 
+                 <div className="text-sm text-slate-600 px-2">
+                    <p>You are about to overwrite these <span className="font-bold">{conflictDetails.totalRecords} records</span> with your current selection.</p>
+                 </div>
 
-            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
-               <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
-               <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
-               <div className="flex justify-between"><span className="text-slate-500">Slots:</span> <span className="font-semibold text-slate-900">L{selectedSlots.join(', L')}</span></div>
-               <div className="flex justify-between items-start"><span className="text-slate-500">Batches:</span> <div className="text-right font-semibold text-slate-900">{selectedMarkingBatches.map(b => metaData.batches[b]).join(', ')}</div></div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-4 text-center">
-               <div className="p-3 bg-green-50 text-green-800 rounded-lg border border-green-100">
-                  <div className="text-2xl font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</div>
-                  <div className="text-xs uppercase font-semibold opacity-70">Present</div>
-               </div>
-               <div className="p-3 bg-red-50 text-red-800 rounded-lg border border-red-100">
-                  <div className="text-2xl font-bold">{visibleStudents.filter(s => !attendanceStatus[s.uid]).length}</div>
-                  <div className="text-xs uppercase font-semibold opacity-70">Absent</div>
-               </div>
-            </div>
+                 <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                     <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
+                     <Button variant="danger" onClick={executeSave} disabled={isSaving}>Overwrite & Save</Button>
+                 </div>
+             </div>
+         ) : (
+             <div className="space-y-4">
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-sm space-y-2">
+                   <div className="flex justify-between"><span className="text-slate-500">Subject:</span> <span className="font-semibold text-slate-900">{metaData.subjects[selSubjectId]?.name}</span></div>
+                   <div className="flex justify-between"><span className="text-slate-500">Date:</span> <span className="font-semibold text-slate-900">{attendanceDate}</span></div>
+                   <div className="flex justify-between"><span className="text-slate-500">Slots:</span> <span className="font-semibold text-slate-900">L{selectedSlots.join(', L')}</span></div>
+                   <div className="flex justify-between items-start"><span className="text-slate-500">Batches:</span> <div className="text-right font-semibold text-slate-900">{selectedMarkingBatches.map(b => metaData.batches[b]).join(', ')}</div></div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 text-center">
+                   <div className="p-3 bg-green-50 text-green-800 rounded-lg border border-green-100">
+                      <div className="text-2xl font-bold">{visibleStudents.filter(s => attendanceStatus[s.uid]).length}</div>
+                      <div className="text-xs uppercase font-semibold opacity-70">Present</div>
+                   </div>
+                   <div className="p-3 bg-red-50 text-red-800 rounded-lg border border-red-100">
+                      <div className="text-2xl font-bold">{visibleStudents.filter(s => !attendanceStatus[s.uid]).length}</div>
+                      <div className="text-xs uppercase font-semibold opacity-70">Absent</div>
+                   </div>
+                </div>
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-               <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
-               <Button onClick={executeSave} disabled={isSaving} variant={conflictDetails ? "danger" : "primary"}>
-                  {isSaving ? 'Processing...' : conflictDetails ? 'Overwrite & Save' : 'Confirm & Save'}
-               </Button>
-            </div>
-         </div>
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                   <Button variant="secondary" onClick={() => setShowConfirmModal(false)}>Cancel</Button>
+                   <Button onClick={executeSave} disabled={isSaving}>
+                      {isSaving ? 'Processing...' : 'Confirm & Save'}
+                   </Button>
+                </div>
+             </div>
+         )}
       </Modal>
     </div>
   );
